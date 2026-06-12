@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
+CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
+PROVISIONER_DIR="$API_DIR/homelab-vm-provisioner"
+API_PUBLIC_DIR="$API_DIR/public"
+PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$PROVISIONER_DIR/.venv}"
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+require_path() {
+    if [[ ! -e "$1" ]]; then
+        printf 'Missing required path: %s\n' "$1" >&2
+        exit 1
+    fi
+}
+
+require_path "$API_DIR"
+require_path "$CLIENT_DIR"
+require_path "$PROVISIONER_DIR"
+require_path "$PROVISIONER_DIR/setup"
+
+if [[ ! -e "$API_DIR/.git" || ! -e "$CLIENT_DIR/.git" || ! -e "$PROVISIONER_DIR/.git" ]]; then
+    log "Initializing git submodules"
+    git -C "$ROOT_DIR" submodule update --init --recursive
+else
+    log "Git submodules already initialized; preserving local changes"
+fi
+
+if [[ -d "$PROVISIONER_VENV_DIR" && ! -x "$PROVISIONER_VENV_DIR/bin/python" ]]; then
+    log "Removing incomplete provisioner virtualenv"
+    rm -rf "$PROVISIONER_VENV_DIR"
+fi
+
+mkdir -p "$(dirname "$PROVISIONER_VENV_DIR")"
+
+log "Running nested Python provisioner setup"
+"$PROVISIONER_DIR/setup" "$@" --venv "$PROVISIONER_VENV_DIR"
+
+log "Installing API npm packages"
+npm --prefix "$API_DIR" install
+
+log "Installing client npm packages"
+npm --prefix "$CLIENT_DIR" install
+
+log "Installing Playwright Chromium"
+node "$CLIENT_DIR/node_modules/@playwright/test/cli.js" install chromium
+
+log "Running workspace build"
+"$ROOT_DIR/build"
+
+log "Setup complete"
+printf 'Start the API with ./start\n'

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
+API_PUBLIC_INDEX="$API_DIR/public/index.html"
+PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$API_DIR/homelab-vm-provisioner/.venv}"
+PROVISIONER_PYTHON_BIN="$PROVISIONER_VENV_DIR/bin/python"
+
+if [[ ! -f "$API_PUBLIC_INDEX" ]]; then
+    printf 'Client bundle not found at %s\n' "$API_PUBLIC_INDEX" >&2
+    printf 'Run ./setup first to build and deploy the client assets.\n' >&2
+    exit 1
+fi
+
+if [[ ! -x "$PROVISIONER_PYTHON_BIN" ]]; then
+    printf 'Provisioner Python interpreter not found at %s\n' "$PROVISIONER_PYTHON_BIN" >&2
+    printf 'Run ./setup first so the nested provisioner is installed for the API bridge.\n' >&2
+    exit 1
+fi
+
+export HLVMP_PYTHON_BIN="$PROVISIONER_PYTHON_BIN"
+exec npm --prefix "$API_DIR" start
