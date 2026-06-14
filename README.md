@@ -98,6 +98,8 @@ The root project mostly works out of the box. The main configuration points are 
 | `PORT` | `3000` | API via `./start` | HTTP port for the bundled app |
 | `HLVMP_PROVISIONER_DIR` | `homelab-vm-provisioner-api/homelab-vm-provisioner` | API | Override the nested provisioner checkout path |
 | `HLVMP_API_RUNTIME_DIR` | `homelab-vm-provisioner-api/runtime` | API | Legacy runtime directory used for startup migration |
+| `HLVMP_NETWORK_POOL_CIDR` | `10.80.0.0/16` | API | Global private pool used to allocate per-network-group subnets |
+| `HLVMP_NETWORK_GROUP_PREFIX_LENGTH` | `28` | API | Prefix length allocated to each managed network group |
 | `HLVMP_PYTHON_BIN` | set automatically by `./start` | API | Python executable used by the API bridge |
 | `VITE_API_BASE_URL` | unset | client dev/build | Optional API base URL when running the client separately from the API |
 
@@ -115,8 +117,23 @@ After setup and use, the workspace relies on these paths:
 
 - `homelab-vm-provisioner-api/public/`: deployed client bundle served by the API
 - `homelab-vm-provisioner-api/homelab-vm-provisioner/configs/`: saved VM YAML configs
+- `homelab-vm-provisioner-api/homelab-vm-provisioner/vm/metadata/`: persisted tenant and network-group records
 - `homelab-vm-provisioner-api/homelab-vm-provisioner/vm/keys/users/`: uploaded SSH public keys
 - `homelab-vm-provisioner-api/homelab-vm-provisioner/vm/data/`: provisioner VM data
+
+## Tenant Networking
+
+The workspace now uses tenant-owned network groups instead of one flat VM network.
+
+- each network group maps to one libvirt network and one small subnet, default `/28`
+- new groups allocate subnets from `HLVMP_NETWORK_POOL_CIDR`, default `10.80.0.0/16`
+- VMs in the same group can talk by default
+- hypervisor host access is allowed by default and can be disabled per VM
+- cross-group traffic is denied by default
+- private LAN access is denied by default and can be enabled per VM for admin-owned VMs
+- internet egress is available through NAT-backed profiles without exposing private RFC1918 LANs by default
+
+Managed VM and network-group policy now reconciles through application-owned nftables tables. See `homelab-vm-provisioner-api/docs/vm-networking-nftables.md`.
 
 ## Running
 
