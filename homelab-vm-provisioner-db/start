@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source component .env (parent vars inherited through execution sequence)
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Parse arguments
+DOCKER_MODE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --docker)
+            DOCKER_MODE=true
+            ;;
+        --help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Start PostgreSQL database."
+            echo ""
+            echo "Options:"
+            echo "  --docker    Start PostgreSQL in Docker"
+            echo "  --help      Show this help message"
+            echo ""
+            echo "Default: Start native PostgreSQL service"
+            exit 0
+            ;;
+    esac
+done
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+run_sudo() {
+    if [[ "${EUID}" -eq 0 ]]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+if [[ "$DOCKER_MODE" == true ]]; then
+    # Docker mode: start combined PostgreSQL + microservice container
+    if ! command -v docker >/dev/null 2>&1; then
+        log "Error: Docker not found. Install Docker Engine."
+        exit 1
+    fi
+    
+    # Check if container is already running
+    if docker ps --filter "name=hlvmp-db" --format '{{.Names}}' | grep -q '^hlvmp-db$'; then
+        log "Database container is already running"
+        log "Container: hlvmp-db"
+        log "Microservice Port: ${DB_SERVICE_PORT:-3002}"
+        log ""
+        log "To restart:"
+        log "  docker stop hlvmp-db"
+        log "  ./start --docker"
+        exit 0
+    fi
+    
+    DB_SERVICE_PORT="${DB_SERVICE_PORT:-3002}"
+    POSTGRES_USER="${POSTGRES_USER:-hlvmp}"
+    POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-hlvmppass}"
+    POSTGRES_DB="${POSTGRES_DB:-hlvmp}"
+    
+    log "Starting database container (PostgreSQL + microservice)"
+    log "  Container: hlvmp-db"
+    log "  Microservice Port: $DB_SERVICE_PORT (exposed)"
+    log "  PostgreSQL Port: 5432 (internal only)"
+    log "  Database: $POSTGRES_DB"
+    log "  User: $POSTGRES_USER"
+    log "  Volume: hlvmp-postgres-data"
+    
+    docker run -d \
+        --name hlvmp-db \
+        --restart unless-stopped \
+        -e POSTGRES_USER="$POSTGRES_USER" \
+        -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+        -e POSTGRES_DB="$POSTGRES_DB" \
+        -e PGDATA=/var/lib/postgresql/data \
+        -e DB_SERVICE_PORT="$DB_SERVICE_PORT" \
+        -p "$DB_SERVICE_PORT:$DB_SERVICE_PORT" \
+        -v hlvmp-postgres-data:/var/lib/postgresql/data \
+        hlvmp-db:latest
+    
+    log ""
+    log "Database container started successfully"
+    log ""
+    log "The container includes:"
+    log "  • PostgreSQL 17 (internal, port 5432)"
+    log "  • DB Microservice (exposed, port $DB_SERVICE_PORT)"
+    log ""
+    log "Microservice URL:"
+    log "  http://localhost:$DB_SERVICE_PORT"
+    log ""
+    log "Migrations run automatically on container startup."
+    log ""
+    log "Check logs:"
+    log "  docker logs hlvmp-db"
+    log ""
+    log "Check health:"
+    log "  curl http://localhost:$DB_SERVICE_PORT/health"
+    log ""
+    log "Stop container:"
+    log "  docker stop hlvmp-db"
+else
+    # Native mode
+    log "Starting native PostgreSQL service"
+    
+    if command -v systemctl >/dev/null 2>&1; then
+        # systemd-based systems (most modern Linux)
+        SERVICE_NAME="postgresql"
+        
+        # Try common service names
+        if systemctl list-unit-files | grep -q "postgresql-17.service"; then
+            SERVICE_NAME="postgresql-17"
+        elif systemctl list-unit-files | grep -q "postgresql@17-main.service"; then
+            SERVICE_NAME="postgresql@17-main"
+        elif systemctl list-unit-files | grep -q "postgresql.service"; then
+            SERVICE_NAME="postgresql"
+        fi
+        
+        log "Starting $SERVICE_NAME service"
+        run_sudo systemctl start "$SERVICE_NAME"
+        run_sudo systemctl enable "$SERVICE_NAME" || true
+        
+        log "PostgreSQL service started"
+        log "Status: sudo systemctl status $SERVICE_NAME"
+    elif command -v service >/dev/null 2>&1; then
+        # SysVinit-based systems
+        log "Starting postgresql service"
+        run_sudo service postgresql start
+        
+        log "PostgreSQL service started"
+        log "Status: sudo service postgresql status"
+    elif command -v rc-service >/dev/null 2>&1; then
+        # OpenRC (Alpine, Gentoo)
+        log "Starting postgresql service"
+        run_sudo rc-service postgresql start
+        run_sudo rc-update add postgresql default || true
+        
+        log "PostgreSQL service started"
+        log "Status: sudo rc-service postgresql status"
+    else
+        log "Error: Could not detect service manager. Start PostgreSQL manually."
+        exit 1
+    fi
+    
+    log ""
+    log "PostgreSQL started successfully"
+    log ""
+    log "Default connection (modify .env to customize):"
+    log "  DATABASE_URL=postgresql://postgres:@localhost:5432/postgres"
+    log ""
+    log "Create database and user:"
+    log "  sudo -u postgres psql -c \"CREATE DATABASE hlvmp;\""
+    log "  sudo -u postgres psql -c \"CREATE USER hlvmp WITH PASSWORD 'hlvmppass';\""
+    log "  sudo -u postgres psql -c \"GRANT ALL PRIVILEGES ON DATABASE hlvmp TO hlvmp;\""
+    log ""
+    log "Then set DATABASE_URL in .env:"
+    log "  DATABASE_URL=postgresql://hlvmp:hlvmppass@localhost:5432/hlvmp"
+    log ""
+    log "Run migrations:"
+    log "  npm run migrate"
+fi
