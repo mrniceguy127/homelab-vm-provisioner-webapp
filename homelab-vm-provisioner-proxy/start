@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)"
-PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROXY_DIR="$SCRIPT_DIR"
 PROXY_PUBLIC_DIR="$PROXY_DIR/public"
 
-# Source .env file if it exists
-if [[ -f "$ROOT_DIR/.env" ]]; then
+# Source component .env (parent vars inherited through execution sequence)
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
     set -a
-    source "$ROOT_DIR/.env"
+    source "$SCRIPT_DIR/.env"
     set +a
 fi
 
@@ -29,14 +30,14 @@ log() {
 # Check if static files exist
 if [[ ! -f "$PROXY_PUBLIC_DIR/index.html" ]]; then
     log "Error: Static files not found in $PROXY_PUBLIC_DIR"
-    log "Run ./build-client-docker first to generate static files"
+    log "Run ../homelab-vm-provisioner-client/build first to generate static files"
     exit 1
 fi
 
 # Build proxy image if it doesn't exist
 if ! docker image inspect homelab-vm-provisioner-proxy:latest >/dev/null 2>&1; then
     log "Proxy image not found. Building..."
-    "$ROOT_DIR/build-proxy-docker"
+    "$PROXY_DIR/build"
 fi
 
 log "Starting proxy container"

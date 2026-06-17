@@ -24,18 +24,25 @@ Browser → Proxy (port 3000) → API (port 3001) → Python CLI → libvirt
 ```text
 .
 |- homelab-vm-provisioner-api/
+|  |- setup              # Setup API and Python provisioner
+|  `- ...
 |- homelab-vm-provisioner-client/
+|  |- setup              # Setup client environment
+|  |- build              # Build with Docker
+|  `- ...
 |- homelab-vm-provisioner-proxy/
-|- scripts/
-|  |- build-client-docker
-|  |- build-proxy-docker
-|  |- start-proxy-docker
-|  `- test-docker-mode
+|  |- setup              # Setup proxy environment
+|  |- build              # Build Docker image
+|  |- start              # Run in Docker
+|  `- ...
 |- .env.example
 |- DOCKER.md
-|- setup
-|- build
-|- start
+|- setup                 # Orchestrates all component setups
+|- build                 # Orchestrates all builds
+|- start                 # Starts all services
+|- test-all              # Runs all tests
+|- scripts/
+|  `- test-docker-mode   # Test Docker setup
 `- README.md
 ```
 
@@ -57,6 +64,19 @@ Notes:
 - On machines where system packages are already installed, use `./setup --skip-system-packages`.
 
 ## Setup
+
+### Prerequisites
+
+**Required:**
+- Git (for cloning and submodule management)
+
+**Component-specific:**
+- Each component will install its own system dependencies when you run its `./setup` script
+- See "Component-specific setup" section below for details
+
+**Optional:**
+- Docker (if using `--docker` mode for client builds or proxy deployment)
+  - **Note**: Docker installation is your responsibility. Install Docker Desktop (macOS/Windows) or Docker Engine (Linux) before running `./setup --docker`
 
 ### Fresh workspace setup
 
@@ -82,14 +102,53 @@ If you are cloning fresh, `git clone --recurse-submodules <repo>` is the simples
 
 What it does:
 
-- installs all system packages: git, Node.js 18+, npm, Python, libvirt, qemu, nftables, cloud-image-utils (on supported Linux distributions)
-- enables and starts the libvirtd service
 - initializes git submodules
-- sets up the nested Python provisioner virtual environment
-- installs API npm dependencies
-- installs client npm dependencies (skipped in `--docker` mode unless `--dev` is also specified)
-- installs proxy npm dependencies (skipped in `--docker` mode unless `--dev` is also specified)
-- installs Playwright Chromium for client e2e tests (skipped in `--docker` mode unless `--dev` is also specified)
+- calls component setup scripts:
+  - `homelab-vm-provisioner-api/setup` - installs system packages (Node.js, Python, libvirt, qemu, nftables) and sets up Python provisioner
+  - `homelab-vm-provisioner-client/setup` - installs system packages (Node.js, npm) and client dependencies
+  - `homelab-vm-provisioner-proxy/setup` - installs system packages (Node.js, npm) and proxy dependencies
+
+**Note**: The monorepo `./setup` script is just an orchestrator. It delegates all system package installation to the component scripts.
+
+### Component-specific setup
+
+Each component can be set up independently with its own system package requirements:
+
+```bash
+# Setup API and Python provisioner
+cd homelab-vm-provisioner-api
+./setup                     # Install all system packages (Node.js, Python, libvirt, qemu, nftables)
+./setup --skip-system-packages  # Skip system packages (assume already installed)
+./setup --dev               # Install with dev dependencies
+
+# Setup client
+cd homelab-vm-provisioner-client
+./setup                     # Install system packages (Node.js, npm)
+./setup --skip-system-packages  # Skip system packages
+./setup --skip-npm          # Skip npm install (for Docker builds)
+./setup --skip-playwright   # Skip Playwright browser installation
+
+# Setup proxy
+cd homelab-vm-provisioner-proxy
+./setup                     # Install system packages (Node.js, npm)
+./setup --skip-system-packages  # Skip system packages
+./setup --skip-npm          # Skip npm install (for Docker runtime)
+```
+
+**System packages installed by each component:**
+
+- **API**: git, curl, Node.js 18+, npm, Python 3, pip, venv, libvirt, qemu, nftables, cloud-image-utils, openssh, wget
+  - Also enables and starts libvirtd service
+- **Client**: git, curl, Node.js 18+, npm
+- **Proxy**: git, curl, Node.js 18+, npm
+- **Python Provisioner** (nested in API): Python 3, pip, venv, libvirt, qemu, nftables, cloud-image-utils, openssh, wget
+  - Also enables and starts libvirtd service
+
+**Supported Linux distributions:**
+- Ubuntu/Debian (Node.js from NodeSource)
+- Fedora (native packages)
+- RHEL/Rocky/AlmaLinux (EPEL + NodeSource)
+- Arch Linux (native packages)
 
 If your machine already has the required OS packages, use:
 
@@ -125,14 +184,14 @@ The root project mostly works out of the box. The main configuration points are 
 - `./build`: builds documentation and app artifacts (no tests)
 - `./build --docker`: builds client static files using Docker instead of local Node.js
 - `./build --client-only`: builds only client (skips API docs), useful for frontend-only development
-- `./scripts/build-client-docker`: standalone script to build only client static files with Docker
-- `./scripts/build-proxy-docker`: builds the proxy Docker image
+- `./homelab-vm-provisioner-client/build`: standalone script to build only client static files with Docker
+- `./homelab-vm-provisioner-proxy/build`: builds the proxy Docker image
 - `./test-all`: runs all tests with coverage across Python CLI, API, and client
 - `./start`: starts the API on port 3001 and the proxy on port 3000, serving the already-built client
 - `./start --docker`: starts API locally and proxy in Docker container
 - `./start --client-only`: builds client and starts proxy only (no API), useful for connecting to remote API
 - `./start --client-only --docker`: builds client with Docker and runs proxy in Docker (no API)
-- `./scripts/start-proxy-docker`: runs the proxy in a Docker container (requires static files in `public/`)
+- `./homelab-vm-provisioner-proxy/start`: runs the proxy in a Docker container (requires static files in `public/`)
 
 ### Docker commands
 
@@ -144,9 +203,9 @@ The root project mostly works out of the box. The main configuration points are 
 ./start --docker
 
 # Or use individual scripts
-./scripts/build-client-docker  # Build client static files
-./scripts/build-proxy-docker   # Build proxy image
-./scripts/start-proxy-docker   # Run proxy container
+./homelab-vm-provisioner-client/build  # Build client static files
+./homelab-vm-provisioner-proxy/build   # Build proxy image
+./homelab-vm-provisioner-proxy/start   # Run proxy container
 ```
 
 ### Client-only workflow (frontend development)
@@ -177,6 +236,67 @@ Or set environment variables directly:
 ```bash
 PROXY_PORT=8080 API_PORT=8081 ./start --docker
 ```
+
+### Environment Variables (.env)
+
+The project uses a **hierarchical .env configuration system** where component `.env` files override parent values through natural script execution sequence:
+
+**Structure:**
+```
+workspace/.env                                    # Loaded by workspace scripts
+├── homelab-vm-provisioner-api/.env              # Loaded by API scripts (overrides workspace)
+│   └── homelab-vm-provisioner/.env              # Loaded by provisioner scripts (overrides API & workspace)
+├── homelab-vm-provisioner-client/.env           # Loaded by client scripts (overrides workspace)
+└── homelab-vm-provisioner-proxy/.env            # Loaded by proxy scripts (overrides workspace)
+```
+
+**How hierarchy works:**
+1. Parent script sources workspace `.env`
+2. Parent script calls child script (child inherits environment variables)
+3. Child script sources only its own `.env` (overrides inherited values)
+4. Variables not in child `.env` remain from parent (inheritance)
+
+**Example execution flow:**
+```bash
+./setup
+  ├─ Sources workspace/.env (API_PORT=3001, PROXY_PORT=3000)
+  ├─ Calls homelab-vm-provisioner-api/setup
+  │   ├─ Inherits API_PORT=3001, PROXY_PORT=3000
+  │   ├─ Sources api/.env (API_PORT=4001)  # Override
+  │   └─ Result: API_PORT=4001, PROXY_PORT=3000  # Kept from parent
+  └─ Calls homelab-vm-provisioner-proxy/setup
+      ├─ Inherits API_PORT=3001, PROXY_PORT=3000
+      ├─ Sources proxy/.env (PROXY_PORT=8080)  # Override
+      └─ Result: API_PORT=3001, PROXY_PORT=8080  # Kept from parent
+```
+
+**Key principle:** Children never load parent `.env` files. They only load their own. Hierarchy happens naturally through execution sequence and environment variable inheritance.
+
+**Setup:**
+```bash
+# Copy all example files
+cp .env.example .env
+cp homelab-vm-provisioner-api/.env.example homelab-vm-provisioner-api/.env
+cp homelab-vm-provisioner-client/.env.example homelab-vm-provisioner-client/.env
+cp homelab-vm-provisioner-proxy/.env.example homelab-vm-provisioner-proxy/.env
+cp homelab-vm-provisioner-api/homelab-vm-provisioner/.env.example homelab-vm-provisioner-api/homelab-vm-provisioner/.env
+
+# Customize as needed
+```
+
+**Variable ownership:**
+- **Workspace**: Sets defaults for all components
+- **Components**: Override specific values, inherit the rest
+- **Example**: Set `API_PORT=3001` in workspace, override with `API_PORT=4001` in API component
+
+**Common variables:**
+- `PROXY_PORT` - Proxy server port (default: 3000)
+- `API_PORT` - API server port (default: 3001)
+- `API_HOST` - API host for Docker proxy (default: http://172.17.0.1)
+- `API_URL` - Full API URL (constructed from API_HOST + API_PORT if not set)
+- `PROVISIONER_VENV_DIR` - Python provisioner virtualenv path
+- `HLVMP_NETWORK_POOL_CIDR` - VM network pool CIDR
+- `HLVMP_NETWORK_GROUP_PREFIX_LENGTH` - VM network group prefix length
 
 ### Client-only mode (remote API)
 

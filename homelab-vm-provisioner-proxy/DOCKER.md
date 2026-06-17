@@ -17,13 +17,13 @@ The proxy container:
 
 ```bash
 # Build client static files (if not already done)
-./scripts/build-client-docker
+../homelab-vm-provisioner-client/build
 
 # Build proxy image
-./scripts/build-proxy-docker
+./build
 
 # Run proxy container (API on host at port 3001)
-./scripts/start-proxy-docker
+./start
 ```
 
 ### Option 2: Manual Docker Commands
@@ -120,7 +120,7 @@ cd homelab-vm-provisioner-client && npm run dev
 
 Use Docker proxy + host API:
 ```bash
-./scripts/start-proxy-docker
+./start
 # Access at http://localhost:3000
 ```
 
@@ -156,7 +156,7 @@ docker logs -f hlvmp-proxy
 ```bash
 ls -la homelab-vm-provisioner-proxy/public/
 # Should contain index.html and assets/
-./scripts/build-client-docker
+../homelab-vm-provisioner-client/build
 ```
 
 ### Cannot reach API
@@ -174,7 +174,7 @@ ls -la homelab-vm-provisioner-proxy/public/
 
 **Solution**: Change port:
 ```bash
-PROXY_PORT=8080 ./scripts/start-proxy-docker
+PROXY_PORT=8080 ./start
 # Or: docker run -p 8080:3000 ...
 ```
 

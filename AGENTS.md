@@ -4,12 +4,21 @@ Integrated monorepo for VM provisioning: Python CLI + Node.js API + React Client
 
 ## Quick Start
 
+## Quick Start
+
 ```bash
-./setup                # Install dependencies (git submodules, venv, npm, Playwright)
+./setup                # Initialize submodules and call component setups
 ./setup --docker       # Setup for Docker mode (skip client/proxy npm install)
 ./setup --dev          # Setup with dev dependencies (for testing)
 ./setup --docker --dev # Docker mode + dev dependencies on host (for testing)
 ./setup --client-only  # Setup for client-only development (skip API/provisioner)
+./setup --skip-system-packages  # Skip system packages in all components
+
+# Component-specific setup (each installs its own system packages)
+cd homelab-vm-provisioner-api && ./setup [--skip-system-packages] [--dev]
+cd homelab-vm-provisioner-client && ./setup [--skip-system-packages] [--skip-npm] [--skip-playwright]
+cd homelab-vm-provisioner-proxy && ./setup [--skip-system-packages] [--skip-npm]
+
 ./build                # Build all (docs + artifacts, no tests)
 ./build --docker       # Build with Docker for client static files
 ./build --client-only  # Build only client (skip API, for frontend-only dev)
@@ -17,12 +26,17 @@ Integrated monorepo for VM provisioning: Python CLI + Node.js API + React Client
 ./start                # Start proxy (port 3000) and API (port 3001) - local
 ./start --docker       # Start API locally, proxy in Docker
 ./start --client-only  # Build client and start proxy only (no API, for remote API)
-./scripts/build-client-docker  # Build only client with Docker
-./scripts/build-proxy-docker   # Build proxy Docker image
-./scripts/start-proxy-docker   # Run proxy in Docker container
+./homelab-vm-provisioner-client/build  # Build only client with Docker
+./homelab-vm-provisioner-proxy/build   # Build proxy Docker image
+./homelab-vm-provisioner-proxy/start   # Run proxy in Docker container
 ```
 
-**Note**: Copy `.env.example` to `.env` to customize ports and configuration. Or use `PROXY_PORT` and `API_PORT` environment variables.
+**Prerequisites:**
+- Git (required by monorepo for submodule management)
+- Docker (optional, required only for `--docker` mode)
+  - **Installation is your responsibility**: Install Docker Desktop or Docker Engine before using Docker features
+
+**Note**: The monorepo `./setup` script orchestrates component setups. Each component installs its own system packages. The project uses hierarchical `.env` configuration where component `.env` files override parent values through natural execution sequence (parent scripts source workspace `.env`, then call child scripts which source only their own `.env` and inherit remaining parent variables). Copy `.env.example` files to `.env` to customize configuration.
 
 ## Projects
 
@@ -58,6 +72,8 @@ Browser → Proxy (port 3000) → API (port 3001) → Python CLI → libvirt
 When working inside a subproject, prefer that subproject's `AGENTS.md` for project-specific commands, framework rules, and testing patterns.
 
 Do not assume patterns from one subproject apply to another. For example, Python uses `unittest`, the API uses `vitest`, and the client uses React testing patterns.
+
+**Monorepo Role**: The workspace root is just an orchestrator. It does NOT install system packages. All system package installation is delegated to component setup scripts.
 
 ## AI Agents
 

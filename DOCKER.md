@@ -28,10 +28,15 @@ Browser → Proxy Container (3000) → API Host (3001) → Python CLI → libvir
 
 ### 1. Install Prerequisites
 
-- Docker Desktop (macOS/Windows) or Docker Engine (Linux)
-- Git with submodule support
+**Required (your responsibility to install):**
+- **Docker Desktop** (macOS/Windows) or **Docker Engine** (Linux)
+  - The setup scripts do NOT install Docker for you
+  - Install Docker before running `./setup --docker`
+- Git (for cloning and submodule management)
+
+**Installed by component setup scripts:**
 - Python 3 with venv (for API/provisioner)
-- Node.js 18+ (for API only, client uses Docker)
+- Node.js 18+ (for API)
 
 ### 2. Clone and Initialize
 
@@ -89,24 +94,24 @@ PROVISIONER_VENV_DIR=/custom/path ./setup --docker
 - Purpose: Build static files
 - Size: ~334MB
 - Type: Build-time only (ephemeral containers)
-- Usage: `./scripts/build-client-docker`
+- Usage: `./homelab-vm-provisioner-client/build`
 
 ### Proxy (`homelab-vm-provisioner-proxy`)
 - Purpose: Runtime reverse proxy
 - Size: ~133MB
 - Type: Runtime service
-- Usage: `./start --docker` or `./scripts/start-proxy-docker`
+- Usage: `./start --docker` or `./homelab-vm-provisioner-proxy/start`
 
 ### Rebuild Images
 
 ```bash
 # Rebuild client builder image
 docker rmi homelab-vm-provisioner-client-builder
-./scripts/build-client-docker
+./homelab-vm-provisioner-client/build
 
 # Rebuild proxy image
 docker rmi homelab-vm-provisioner-proxy
-./scripts/build-proxy-docker
+./homelab-vm-provisioner-proxy/build
 ```
 
 ## Manual Operations
@@ -114,14 +119,14 @@ docker rmi homelab-vm-provisioner-proxy
 ### Build Client Static Files
 
 ```bash
-./scripts/build-client-docker
+./homelab-vm-provisioner-client/build
 # Output: homelab-vm-provisioner-proxy/public/
 ```
 
 ### Build Proxy Image
 
 ```bash
-./scripts/build-proxy-docker
+./homelab-vm-provisioner-proxy/build
 ```
 
 ### Run Proxy Container Manually
@@ -183,8 +188,8 @@ PROXY_PORT=8080 API_PORT=8081 ./start --docker
 
 ```bash
 # Build images
-./scripts/build-client-docker
-./scripts/build-proxy-docker
+./homelab-vm-provisioner-client/build
+./homelab-vm-provisioner-proxy/build
 
 # Or run setup again
 ./setup --docker
@@ -197,7 +202,7 @@ PROXY_PORT=8080 API_PORT=8081 ./start --docker
 ls -la homelab-vm-provisioner-proxy/public/
 
 # Rebuild if needed
-./scripts/build-client-docker
+./homelab-vm-provisioner-client/build
 ```
 
 ### API Cannot Connect to Proxy
@@ -230,8 +235,8 @@ git pull
 git submodule update --init --recursive
 
 # Rebuild
-./scripts/build-client-docker  # Client changes
-./scripts/build-proxy-docker   # Proxy changes
+./homelab-vm-provisioner-client/build  # Client changes
+./homelab-vm-provisioner-proxy/build   # Proxy changes
 npm --prefix homelab-vm-provisioner-api install  # API changes
 
 # Restart

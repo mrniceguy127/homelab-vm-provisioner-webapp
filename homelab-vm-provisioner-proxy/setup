@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Source component .env (parent vars inherited through execution sequence)
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Parse arguments
+SKIP_NPM=false
+SKIP_SYSTEM_PACKAGES=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --skip-npm)
+            SKIP_NPM=true
+            ;;
+        --skip-system-packages)
+            SKIP_SYSTEM_PACKAGES=true
+            ;;
+        --help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Setup the reverse proxy environment."
+            echo ""
+            echo "Options:"
+            echo "  --skip-npm               Skip npm install (for Docker runtime)"
+            echo "  --skip-system-packages   Skip system package installation"
+            echo "  --help                   Show this help message"
+            exit 0
+            ;;
+    esac
+done
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+run_sudo() {
+    if [[ "${EUID}" -eq 0 ]]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+require_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        printf 'Missing command: %s\n' "$1" >&2
+        printf 'Please install %s before running setup\n' "$1" >&2
+        exit 1
+    fi
+}
+
+install_system_packages() {
+    if [[ ! -r /etc/os-release ]]; then
+        printf 'Unsupported distro: missing /etc/os-release\n' >&2
+        exit 1
+    fi
+
+    # shellcheck disable=SC1091
+    source /etc/os-release
+
+    log "Installing system packages for ${ID}"
+
+    case "${ID}" in
+        ubuntu|debian)
+            run_sudo apt update
+            run_sudo apt install -y \
+                git \
+                curl \
+                ca-certificates \
+                gnupg
+            
+            # Install Node.js 18+ from NodeSource
+            if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | cut -d. -f1 | tr -d 'v')" -lt 18 ]]; then
+                log "Installing Node.js 18.x from NodeSource"
+                if [[ ! -f /etc/apt/keyrings/nodesource.gpg ]]; then
+                    run_sudo mkdir -p /etc/apt/keyrings
+                    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | run_sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+                fi
+                echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_18.x nodistro main" | run_sudo tee /etc/apt/sources.list.d/nodesource.list
+                run_sudo apt update
+                run_sudo apt install -y nodejs
+            fi
+            ;;
+        fedora)
+            run_sudo dnf install -y \
+                git \
+                curl \
+                ca-certificates \
+                nodejs \
+                npm
+            ;;
+        rhel|rocky|almalinux)
+            run_sudo dnf install -y \
+                git \
+                curl \
+                ca-certificates
+            
+            # Install Node.js 18+ from NodeSource
+            if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | cut -d. -f1 | tr -d 'v')" -lt 18 ]]; then
+                log "Installing Node.js 18.x from NodeSource"
+                curl -fsSL https://rpm.nodesource.com/setup_18.x | run_sudo bash -
+                run_sudo dnf install -y nodejs
+            fi
+            ;;
+        arch)
+            run_sudo pacman -Syu --needed --noconfirm \
+                git \
+                curl \
+                ca-certificates \
+                nodejs \
+                npm
+            ;;
+        *)
+            printf 'Unsupported distro: %s\n' "${ID}" >&2
+            printf 'Please install git, Node.js 18+, and npm manually\n' >&2
+            exit 1
+            ;;
+    esac
+}
+
+# Install system packages if not skipped
+if [[ "$SKIP_SYSTEM_PACKAGES" == "false" ]]; then
+    install_system_packages
+fi
+
+log "Setting up proxy environment"
+
+# Check for Node.js (required even if system packages were skipped)
+if [[ "$SKIP_SYSTEM_PACKAGES" == "true" ]]; then
+    require_cmd node
+    require_cmd npm
+
+    NODE_VERSION=$(node -v | cut -d. -f1 | tr -d 'v')
+    if [[ "$NODE_VERSION" -lt 18 ]]; then
+        printf 'Node.js 18+ required, found: %s\n' "$(node -v)" >&2
+        exit 1
+    fi
+fi
+
+if [[ "$SKIP_NPM" == "false" ]]; then
+    log "Installing npm packages"
+    npm install
+else
+    log "Skipping npm install (--skip-npm specified)"
+fi
+
+log "Proxy setup complete"
+log "Start locally with: npm start or PORT=3000 npm start"
+log "Build Docker image with: ./build"
+log "Run in Docker with: ./start"

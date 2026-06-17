@@ -6,6 +6,13 @@ API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 PROXY_PUBLIC_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy/public"
 
+# Source .env file if it exists
+if [[ -f "$ROOT_DIR/.env" ]]; then
+    set -a
+    source "$ROOT_DIR/.env"
+    set +a
+fi
+
 # Parse arguments
 USE_DOCKER=false
 CLIENT_ONLY=false
@@ -33,7 +40,7 @@ fi
 
 if [[ "$USE_DOCKER" == "true" ]]; then
     log "Building client with Docker"
-    "$ROOT_DIR/scripts/build-client-docker"
+    "$CLIENT_DIR/build"
     
     log "Building client docs (local)"
     npm --prefix "$CLIENT_DIR" run docs:build

@@ -38,7 +38,7 @@ echo ""
 if [[ -f "$ROOT_DIR/homelab-vm-provisioner-proxy/public/index.html" ]]; then
     echo "✓ Static files: built"
 else
-    echo "✗ Static files: not built (run ./scripts/build-client-docker)"
+    echo "✗ Static files: not built (run ./homelab-vm-provisioner-client/build)"
 fi
 
 echo ""

@@ -46,7 +46,7 @@ if [[ "$CLIENT_ONLY" == "true" ]]; then
     # Build client
     if [[ "$USE_DOCKER" == "true" ]]; then
         printf '==> Building client with Docker\n'
-        "$ROOT_DIR/scripts/build-client-docker"
+        "$ROOT_DIR/homelab-vm-provisioner-client/build"
     else
         printf '==> Building client locally\n'
         npm --prefix "$ROOT_DIR/homelab-vm-provisioner-client" run build
@@ -61,7 +61,7 @@ if [[ "$CLIENT_ONLY" == "true" ]]; then
     if [[ "$USE_DOCKER" == "true" ]]; then
         # Check if Docker image exists
         if ! docker image inspect homelab-vm-provisioner-proxy:latest >/dev/null 2>&1; then
-            printf 'Docker image not found. Run ./setup --docker or ./scripts/build-proxy-docker first.\n' >&2
+            printf 'Docker image not found. Run ./setup --docker or ./homelab-vm-provisioner-proxy/build first.\n' >&2
             exit 1
         fi
         
@@ -112,7 +112,7 @@ sleep 2
 if [[ "$USE_DOCKER" == "true" ]]; then
     # Check if Docker image exists
     if ! docker image inspect homelab-vm-provisioner-proxy:latest >/dev/null 2>&1; then
-        printf 'Docker image not found. Run ./setup --docker or ./scripts/build-proxy-docker first.\n' >&2
+        printf 'Docker image not found. Run ./setup --docker or ./homelab-vm-provisioner-proxy/build first.\n' >&2
         kill "$API_PID" 2>/dev/null || true
         exit 1
     fi

@@ -2,6 +2,44 @@
 
 Dead-simple reverse proxy for the homelab VM provisioner monorepo.
 
+## Quick Start
+
+```bash
+# From this directory
+./setup              # Install system packages (Node.js 18+) + npm packages
+./setup --skip-system-packages  # Skip system packages (assume already installed)
+npm start            # Start proxy locally (port 3000)
+
+# Or use Docker (requires Docker installation - your responsibility)
+./build              # Build Docker image
+./start              # Run in Docker container
+```
+
+**Prerequisites for Docker mode:**
+- Docker must be installed (Docker Desktop on macOS/Windows, or Docker Engine on Linux)
+- Docker installation is your responsibility
+
+## Configuration
+
+Copy `.env.example` to `.env` and customize:
+
+```bash
+cp .env.example .env
+# Edit .env to set PROXY_PORT, API_HOST, API_PORT, or API_URL
+```
+
+**Note**: When called from parent scripts, this component inherits workspace `.env` variables. This component's `.env` overrides those inherited values. Variables not set here remain inherited from parent.
+
+## System Requirements
+
+**Installed by `./setup` (can be skipped with `--skip-system-packages`):**
+- git
+- curl
+- Node.js 18+ (from NodeSource on Ubuntu/Debian/RHEL)
+- npm
+
+**Supported distributions:** Ubuntu/Debian, Fedora, RHEL/Rocky/AlmaLinux, Arch Linux
+
 ## Purpose
 
 This proxy serves as the single entry point for the application, handling:
@@ -45,8 +83,8 @@ For production mode:
 ./start --docker
 
 # Or build and run proxy container manually
-./scripts/build-proxy-docker
-./scripts/start-proxy-docker
+./homelab-vm-provisioner-proxy/build
+./homelab-vm-provisioner-proxy/start
 ```
 
 See [DOCKER.md](DOCKER.md) for full details.
