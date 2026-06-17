@@ -34,7 +34,7 @@ React Client → Express API → Python CLI → libvirt
 
 **JavaScript**: ES modules, vitest, async/await, no defaults  
 **React**: Material-UI, ThemeProvider required, Playwright for E2E  
-**Python**: 3.9+, unittest (NOT pytest), ruff, Google-style docstrings
+**Python**: 3.9+, unittest (NOT pytest), ruff (linting required), Google-style docstrings
 
 ## Instruction Priority
 
@@ -57,7 +57,7 @@ See each project's AGENTS.md for usage instructions and available agents.
 
 ## Common Gotchas
 
-**Python**: unittest not pytest, mock libvirt, 80% enforced  
+**Python**: unittest not pytest, mock libvirt, 80% enforced, linting runs before tests  
 **Node.js**: Use npm scripts not node binary, vitest context differs  
 **React**: ThemeProvider required, Playwright needs dev server running
 

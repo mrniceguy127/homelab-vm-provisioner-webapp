@@ -58,19 +58,22 @@ print_header() {
 print_result() {
     local project=$1
     local status=$2
-    local tests=$3
-    local coverage=$4
+    local lint=$3
+    local tests=$4
+    local coverage=$5
     
     if [[ "$status" == "PASS" ]]; then
         echo -e "${GREEN}✓${RESET} ${BOLD}$project${RESET}"
+        echo -e "  Linting:  ${GREEN}$lint${RESET}"
         echo -e "  Tests:    ${GREEN}$tests${RESET}"
         echo -e "  Coverage: ${GREEN}$coverage${RESET}"
-        RESULTS+=("${GREEN}✓${RESET} $project: ${GREEN}$tests${RESET}, Coverage ${GREEN}$coverage${RESET}")
+        RESULTS+=("${GREEN}✓${RESET} $project: Lint ${GREEN}$lint${RESET}, ${GREEN}$tests${RESET}, Coverage ${GREEN}$coverage${RESET}")
     else
         echo -e "${RED}✗${RESET} ${BOLD}$project${RESET}"
+        echo -e "  Linting:  ${YELLOW}$lint${RESET}"
         echo -e "  Tests:    ${RED}$tests${RESET}"
         echo -e "  Coverage: ${YELLOW}$coverage${RESET}"
-        RESULTS+=("${RED}✗${RESET} $project: ${RED}$tests${RESET}, Coverage ${YELLOW}$coverage${RESET}")
+        RESULTS+=("${RED}✗${RESET} $project: Lint ${YELLOW}$lint${RESET}, ${RED}$tests${RESET}, Coverage ${YELLOW}$coverage${RESET}")
         OVERALL_SUCCESS=false
     fi
     echo ""
@@ -86,6 +89,17 @@ cd "$PYTHON_DIR" || exit 1
 # Source Python environment
 source "$PYTHON_DIR/scripts/_resolve_python.sh"
 resolve_python_env
+
+# Run linting
+PYTHON_LINT_OUTPUT=$(mktemp)
+start_spinner "Linting Python CLI"
+if "$PYTHON_BIN" -m ruff check "$PYTHON_DIR/homelab_vm_provisioner" "$PYTHON_DIR/tests" > "$PYTHON_LINT_OUTPUT" 2>&1; then
+    stop_spinner
+    PYTHON_LINT="passed"
+else
+    stop_spinner
+    PYTHON_LINT="issues found"
+fi
 
 # Run tests with coverage
 PYTHON_OUTPUT=$(mktemp)
@@ -129,8 +143,8 @@ if [[ -z "$PYTHON_COVERAGE" ]]; then
     PYTHON_COVERAGE="N/A"
 fi
 
-print_result "Python CLI" "$PYTHON_STATUS" "$PYTHON_TESTS" "$PYTHON_COVERAGE"
-rm -f "$PYTHON_OUTPUT" "$PYTHON_COV_OUTPUT"
+print_result "Python CLI" "$PYTHON_STATUS" "$PYTHON_LINT" "$PYTHON_TESTS" "$PYTHON_COVERAGE"
+rm -f "$PYTHON_OUTPUT" "$PYTHON_COV_OUTPUT" "$PYTHON_LINT_OUTPUT"
 
 # ============================================
 # Node.js API Tests
@@ -138,6 +152,17 @@ rm -f "$PYTHON_OUTPUT" "$PYTHON_COV_OUTPUT"
 print_header "2/3 Node.js API (homelab-vm-provisioner-api)"
 
 cd "$API_DIR" || exit 1
+
+# Run linting
+API_LINT_OUTPUT=$(mktemp)
+start_spinner "Linting Node.js API"
+if npm run lint > "$API_LINT_OUTPUT" 2>&1; then
+    stop_spinner
+    API_LINT="passed"
+else
+    stop_spinner
+    API_LINT="issues found"
+fi
 
 API_OUTPUT=$(mktemp)
 start_spinner "Running Node.js API tests"
@@ -174,8 +199,8 @@ else
     API_COVERAGE="N/A"
 fi
 
-print_result "Node.js API" "$API_STATUS" "$API_TESTS" "$API_COVERAGE"
-rm -f "$API_OUTPUT"
+print_result "Node.js API" "$API_STATUS" "$API_LINT" "$API_TESTS" "$API_COVERAGE"
+rm -f "$API_OUTPUT" "$API_LINT_OUTPUT"
 
 # ============================================
 # React Client Tests
@@ -183,6 +208,17 @@ rm -f "$API_OUTPUT"
 print_header "3/3 React Client (homelab-vm-provisioner-client)"
 
 cd "$CLIENT_DIR" || exit 1
+
+# Run linting
+CLIENT_LINT_OUTPUT=$(mktemp)
+start_spinner "Linting React Client"
+if npm run lint > "$CLIENT_LINT_OUTPUT" 2>&1; then
+    stop_spinner
+    CLIENT_LINT="passed"
+else
+    stop_spinner
+    CLIENT_LINT="warnings"
+fi
 
 CLIENT_OUTPUT=$(mktemp)
 start_spinner "Running React Client tests"
@@ -216,8 +252,8 @@ else
     CLIENT_COVERAGE="N/A"
 fi
 
-print_result "React Client" "$CLIENT_STATUS" "$CLIENT_TESTS" "$CLIENT_COVERAGE"
-rm -f "$CLIENT_OUTPUT"
+print_result "React Client" "$CLIENT_STATUS" "$CLIENT_LINT" "$CLIENT_TESTS" "$CLIENT_COVERAGE"
+rm -f "$CLIENT_OUTPUT" "$CLIENT_LINT_OUTPUT"
 
 # ============================================
 # Summary
