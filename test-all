@@ -2,7 +2,7 @@
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_DIR="$ROOT_DIR/homelab-vm-provisioner-api/homelab-vm-provisioner"
+PYTHON_DIR="$ROOT_DIR/homelab-vm-provisioner-api/homelab-vm-provisioner-cli"
 API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 
@@ -82,11 +82,12 @@ print_result() {
 # ============================================
 # Python CLI Tests
 # ============================================
-print_header "1/3 Python CLI (homelab-vm-provisioner)"
+print_header "1/3 Python CLI (homelab-vm-provisioner-cli)"
 
 cd "$PYTHON_DIR" || exit 1
 
 # Source Python environment
+export ROOT_DIR="$PYTHON_DIR"
 source "$PYTHON_DIR/scripts/_resolve_python.sh"
 resolve_python_env
 
@@ -105,9 +106,9 @@ fi
 PYTHON_OUTPUT=$(mktemp)
 start_spinner "Running Python CLI tests"
 if "$PYTHON_BIN" -m coverage run --source=homelab_vm_provisioner -m unittest \
-    tests.test_config tests.test_provision tests.test_managed_nftables \
-    tests.test_reconciler tests.test_main tests.test_network tests.test_system \
-    tests.test_cli tests.test_integration \
+    tests.test_config tests.test_provision tests.test_adapters tests.test_services \
+    tests.test_managed_nftables tests.test_reconciler tests.test_main tests.test_network \
+    tests.test_system tests.test_cli tests.test_integration \
     > "$PYTHON_OUTPUT" 2>&1; then
     stop_spinner
     # Check if tests actually passed (no failures/errors)

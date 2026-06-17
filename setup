@@ -4,12 +4,46 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
-PROVISIONER_DIR="$API_DIR/homelab-vm-provisioner"
-API_PUBLIC_DIR="$API_DIR/public"
+PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
+PROVISIONER_DIR="$API_DIR/homelab-vm-provisioner-cli"
 PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$PROVISIONER_DIR/.venv}"
+INSTALL_DEV=false
+CLIENT_ONLY=false
+
+# Parse arguments
+USE_DOCKER=false
+SETUP_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --docker)
+            USE_DOCKER=true
+            ;;
+        --dev)
+            INSTALL_DEV=true
+            SETUP_ARGS+=("$arg")
+            ;;
+        --skip-system-packages)
+            SETUP_ARGS+=("$arg")
+            ;;
+        --client-only)
+            CLIENT_ONLY=true
+            ;;
+        *)
+            SETUP_ARGS+=("$arg")
+            ;;
+    esac
+done
 
 log() {
     printf '==> %s\n' "$*"
+}
+
+require_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        printf 'Missing command: %s\n' "$1" >&2
+        printf 'Please run component setup scripts to install dependencies\n' >&2
+        exit 1
+    fi
 }
 
 require_path() {
@@ -19,39 +53,79 @@ require_path() {
     fi
 }
 
-require_path "$API_DIR"
 require_path "$CLIENT_DIR"
-require_path "$PROVISIONER_DIR"
-require_path "$PROVISIONER_DIR/setup"
+require_path "$PROXY_DIR"
 
-if [[ ! -e "$API_DIR/.git" || ! -e "$CLIENT_DIR/.git" || ! -e "$PROVISIONER_DIR/.git" ]]; then
-    log "Initializing git submodules"
-    git -C "$ROOT_DIR" submodule update --init --recursive
+if [[ "$CLIENT_ONLY" == "false" ]]; then
+    require_path "$API_DIR"
+    require_path "$PROVISIONER_DIR"
+    require_path "$PROVISIONER_DIR/setup"
+fi
+
+# Check for git (required for submodule initialization)
+require_cmd git
+
+# Initialize git submodules
+if [[ "$CLIENT_ONLY" == "false" ]]; then
+    if [[ ! -e "$API_DIR/.git" || ! -e "$CLIENT_DIR/.git" || ! -e "$PROVISIONER_DIR/.git" ]]; then
+        log "Initializing git submodules"
+        git -C "$ROOT_DIR" submodule update --init --recursive
+    else
+        log "Git submodules already initialized; preserving local changes"
+    fi
 else
-    log "Git submodules already initialized; preserving local changes"
+    log "Client-only mode: checking required submodules (client)"
+    if [[ ! -e "$CLIENT_DIR/.git" ]]; then
+        log "Initializing client submodule"
+        git -C "$ROOT_DIR" submodule update --init "$CLIENT_DIR"
+    fi
 fi
 
-if [[ -d "$PROVISIONER_VENV_DIR" && ! -x "$PROVISIONER_VENV_DIR/bin/python" ]]; then
-    log "Removing incomplete provisioner virtualenv"
-    rm -rf "$PROVISIONER_VENV_DIR"
+# Setup components using their own setup scripts
+if [[ "$CLIENT_ONLY" == "false" ]]; then
+    log "Setting up API and provisioner"
+    "$API_DIR/setup" "${SETUP_ARGS[@]}"
+else
+    log "Client-only mode: skipping API setup"
 fi
 
-mkdir -p "$(dirname "$PROVISIONER_VENV_DIR")"
+# Setup client
+log "Setting up client"
+if [[ "$USE_DOCKER" == "true" && "$INSTALL_DEV" == "false" ]]; then
+    "$CLIENT_DIR/setup" --skip-npm --skip-playwright "${SETUP_ARGS[@]}"
+else
+    "$CLIENT_DIR/setup" "${SETUP_ARGS[@]}"
+fi
 
-log "Running nested Python provisioner setup"
-"$PROVISIONER_DIR/setup" "$@" --venv "$PROVISIONER_VENV_DIR"
-
-log "Installing API npm packages"
-npm --prefix "$API_DIR" install
-
-log "Installing client npm packages"
-npm --prefix "$CLIENT_DIR" install
-
-log "Installing Playwright Chromium"
-node "$CLIENT_DIR/node_modules/@playwright/test/cli.js" install chromium
-
-log "Running workspace build"
-"$ROOT_DIR/build"
+# Setup proxy
+log "Setting up proxy"
+if [[ "$USE_DOCKER" == "true" && "$INSTALL_DEV" == "false" ]]; then
+    "$PROXY_DIR/setup" --skip-npm "${SETUP_ARGS[@]}"
+else
+    "$PROXY_DIR/setup" "${SETUP_ARGS[@]}"
+fi
 
 log "Setup complete"
-printf 'Start the API with ./start\n'
+if [[ "$CLIENT_ONLY" == "true" ]]; then
+    printf 'Build the client with ./build --client-only'
+    if [[ "$USE_DOCKER" == "true" ]]; then
+        printf ' --docker'
+    fi
+    printf '\n'
+    printf 'Then start the proxy with ./start --client-only'
+    if [[ "$USE_DOCKER" == "true" ]]; then
+        printf ' --docker'
+    fi
+    printf '\n'
+else
+    printf 'Build the workspace with ./build'
+    if [[ "$USE_DOCKER" == "true" ]]; then
+        printf ' --docker'
+    fi
+    printf '\n'
+    printf 'Then start the application with ./start'
+    if [[ "$USE_DOCKER" == "true" ]]; then
+        printf ' --docker'
+    fi
+    printf '\n'
+fi
