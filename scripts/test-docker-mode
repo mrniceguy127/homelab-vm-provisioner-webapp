@@ -30,7 +30,7 @@ echo ""
 
 # Check images
 echo "Docker images:"
-docker images | grep -E "^(REPOSITORY|homelab-vm-provisioner)" || echo "  (none found)"
+docker images | grep -E "^(REPOSITORY|homelab-vm-provisioner-)" || echo "  (none found)"
 
 echo ""
 

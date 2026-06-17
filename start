@@ -13,7 +13,7 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
     set +a
 fi
 
-PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$API_DIR/homelab-vm-provisioner/.venv}"
+PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$API_DIR/homelab-vm-provisioner-cli/.venv}"
 PROVISIONER_PYTHON_BIN="$PROVISIONER_VENV_DIR/bin/python"
 
 # Parse arguments for Docker mode and client-only mode

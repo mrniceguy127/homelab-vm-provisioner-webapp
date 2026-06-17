@@ -245,7 +245,7 @@ The project uses a **hierarchical .env configuration system** where component `.
 ```
 workspace/.env                                    # Loaded by workspace scripts
 ├── homelab-vm-provisioner-api/.env              # Loaded by API scripts (overrides workspace)
-│   └── homelab-vm-provisioner/.env              # Loaded by provisioner scripts (overrides API & workspace)
+│   └── homelab-vm-provisioner-cli/.env          # Loaded by provisioner scripts (overrides API & workspace)
 ├── homelab-vm-provisioner-client/.env           # Loaded by client scripts (overrides workspace)
 └── homelab-vm-provisioner-proxy/.env            # Loaded by proxy scripts (overrides workspace)
 ```
@@ -279,7 +279,7 @@ cp .env.example .env
 cp homelab-vm-provisioner-api/.env.example homelab-vm-provisioner-api/.env
 cp homelab-vm-provisioner-client/.env.example homelab-vm-provisioner-client/.env
 cp homelab-vm-provisioner-proxy/.env.example homelab-vm-provisioner-proxy/.env
-cp homelab-vm-provisioner-api/homelab-vm-provisioner/.env.example homelab-vm-provisioner-api/homelab-vm-provisioner/.env
+cp homelab-vm-provisioner-api/homelab-vm-provisioner-cli/.env.example homelab-vm-provisioner-api/homelab-vm-provisioner-cli/.env
 
 # Customize as needed
 ```
@@ -327,10 +327,10 @@ The `--client-only` flag:
 
 | Variable | Default | Used by | Purpose |
 | --- | --- | --- | --- |
-| `PROVISIONER_VENV_DIR` | `homelab-vm-provisioner-api/homelab-vm-provisioner/.venv` | `./setup`, `./start` | Location of the nested Python provisioner virtual environment |
+| `PROVISIONER_VENV_DIR` | `homelab-vm-provisioner-api/homelab-vm-provisioner-cli/.venv` | `./setup`, `./start` | Location of the nested Python provisioner virtual environment |
 | `PORT` | `3000` (proxy), `3001` (API) | Proxy and API | HTTP ports for the services |
 | `API_URL` | `http://localhost:3001` | Proxy | Backend API URL for proxying |
-| `HLVMP_PROVISIONER_DIR` | `homelab-vm-provisioner-api/homelab-vm-provisioner` | API | Override the nested provisioner checkout path |
+| `HLVMP_PROVISIONER_DIR` | `homelab-vm-provisioner-api/homelab-vm-provisioner-cli` | API | Override the nested provisioner checkout path |
 | `HLVMP_API_RUNTIME_DIR` | `homelab-vm-provisioner-api/runtime` | API | Legacy runtime directory used for startup migration |
 | `HLVMP_NETWORK_POOL_CIDR` | `10.80.0.0/16` | API | Global private pool used to allocate per-network-group subnets |
 | `HLVMP_NETWORK_GROUP_PREFIX_LENGTH` | `28` | API | Prefix length allocated to each managed network group |
@@ -350,10 +350,10 @@ VITE_API_BASE_URL=http://localhost:3000 npm --prefix homelab-vm-provisioner-clie
 After setup and use, the workspace relies on these paths:
 
 - `homelab-vm-provisioner-proxy/public/`: deployed client bundle served by the reverse proxy
-- `homelab-vm-provisioner-api/homelab-vm-provisioner/configs/`: saved VM YAML configs
-- `homelab-vm-provisioner-api/homelab-vm-provisioner/vm/metadata/`: persisted tenant and network-group records
-- `homelab-vm-provisioner-api/homelab-vm-provisioner/vm/keys/users/`: uploaded SSH public keys
-- `homelab-vm-provisioner-api/homelab-vm-provisioner/vm/data/`: provisioner VM data
+- `homelab-vm-provisioner-api/homelab-vm-provisioner-cli/configs/`: saved VM YAML configs
+- `homelab-vm-provisioner-api/homelab-vm-provisioner-cli/vm/metadata/`: persisted tenant and network-group records
+- `homelab-vm-provisioner-api/homelab-vm-provisioner-cli/vm/keys/users/`: uploaded SSH public keys
+- `homelab-vm-provisioner-api/homelab-vm-provisioner-cli/vm/data/`: provisioner VM data
 
 ## Tenant Networking
 
@@ -449,7 +449,7 @@ To run tests across all subprojects and see a consolidated coverage report:
 
 This runs:
 
-- Python CLI tests with coverage (homelab-vm-provisioner)
+- Python CLI tests with coverage (homelab-vm-provisioner-cli)
 - Node.js API tests with coverage (homelab-vm-provisioner-api)
 - React Client tests with coverage (homelab-vm-provisioner-client)
 
@@ -464,7 +464,7 @@ Example output:
 
 ```text
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  1/3 Python CLI (homelab-vm-provisioner)
+  1/3 Python CLI (homelab-vm-provisioner-cli)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✓ Python CLI
   Tests:    275 tests (all passed)

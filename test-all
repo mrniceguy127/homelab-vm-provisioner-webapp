@@ -2,7 +2,7 @@
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_DIR="$ROOT_DIR/homelab-vm-provisioner-api/homelab-vm-provisioner"
+PYTHON_DIR="$ROOT_DIR/homelab-vm-provisioner-api/homelab-vm-provisioner-cli"
 API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 
@@ -82,7 +82,7 @@ print_result() {
 # ============================================
 # Python CLI Tests
 # ============================================
-print_header "1/3 Python CLI (homelab-vm-provisioner)"
+print_header "1/3 Python CLI (homelab-vm-provisioner-cli)"
 
 cd "$PYTHON_DIR" || exit 1
 

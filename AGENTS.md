@@ -42,7 +42,7 @@ cd homelab-vm-provisioner-proxy && ./setup [--skip-system-packages] [--skip-npm]
 
 | Project | Type | Testing |
 |---------|------|---------|
-| **homelab-vm-provisioner** | Python CLI | unittest |
+| **homelab-vm-provisioner-cli** | Python CLI | unittest |
 | **homelab-vm-provisioner-api** | Express API | vitest + supertest |
 | **homelab-vm-provisioner-client** | React + Vite | vitest + Playwright |
 | **homelab-vm-provisioner-proxy** | Reverse Proxy | none (dead simple) |
