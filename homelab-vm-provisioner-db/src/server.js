@@ -2,8 +2,8 @@ import express from 'express';
 import { createRepository } from './repository.js';
 
 const PORT = Number.parseInt(process.env.DB_SERVICE_PORT || '3002', 10);
-const DATABASE_URL = process.env.DATABASE_URL;
-const DB_SERVICE_PASSWORD = process.env.DB_SERVICE_PASSWORD;
+const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://hlvmp:hlvmppass@localhost:5432/hlvmp';
+const DB_SERVICE_PASSWORD = process.env.DB_SERVICE_PASSWORD || 'changeme_db_secret';
 
 if (!DATABASE_URL) {
   console.error('Error: DATABASE_URL environment variable is required');

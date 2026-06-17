@@ -14,6 +14,7 @@ fi
 # Parse arguments
 SKIP_NPM=false
 SKIP_SYSTEM_PACKAGES=false
+DOCKER_MODE=false
 
 for arg in "$@"; do
     case "$arg" in
@@ -23,15 +24,22 @@ for arg in "$@"; do
         --skip-system-packages)
             SKIP_SYSTEM_PACKAGES=true
             ;;
+        --docker)
+            DOCKER_MODE=true
+            SKIP_NPM=true
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Setup the reverse proxy environment."
             echo ""
             echo "Options:"
-            echo "  --skip-npm               Skip npm install (for Docker runtime)"
+            echo "  --skip-npm               Skip npm install"
             echo "  --skip-system-packages   Skip system package installation"
+            echo "  --docker                 Setup for Docker mode (skip npm install)"
             echo "  --help                   Show this help message"
+            echo ""
+            echo "Default: Setup for native Node.js runtime"
             exit 0
             ;;
     esac

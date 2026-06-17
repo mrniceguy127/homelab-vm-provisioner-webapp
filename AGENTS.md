@@ -46,20 +46,63 @@ cd homelab-vm-provisioner-proxy && ./setup [--skip-system-packages] [--skip-npm]
 | **homelab-vm-provisioner-api** | Express API | vitest + supertest |
 | **homelab-vm-provisioner-client** | React + Vite | vitest + Playwright |
 | **homelab-vm-provisioner-proxy** | Reverse Proxy | none (dead simple) |
+| **homelab-vm-provisioner-db** | PostgreSQL Microservice | none (Express + repository) |
 
 ## Architecture
 
 ```
-Browser → Proxy (port 3000) → API (port 3001) → Python CLI → libvirt
-         ↓
-      Static Files (React app from public/)
+Browser → Proxy (3000) → API (3001) → Python CLI → libvirt
+         ↓                     ↓
+      Static Files      DB Service (3002) → PostgreSQL
 ```
 
 **Component Roles**:
 - **Proxy**: Dead-simple reverse proxy serving static files and proxying API requests
 - **Python CLI**: Core provisioning, VM lifecycle, nftables
-- **Node.js API**: HTTP layer, privilege management, config store
+- **Node.js API**: HTTP layer, privilege management, config store, job queue API client
 - **React Client**: User interface, Material-UI
+- **DB Microservice**: PostgreSQL connection manager, SQL validation, job queue operations
+- **PostgreSQL**: Async job queue, event log, resource locks
+
+## Database Setup
+
+The project uses a database microservice for async job tracking. Native PostgreSQL is the default:
+
+```bash
+# Native PostgreSQL (recommended for production)
+cd homelab-vm-provisioner-db
+./setup              # Install PostgreSQL
+./start              # Start service
+npm run migrate      # Run migrations
+
+# Create database and user
+sudo -u postgres psql -c "CREATE DATABASE hlvmp;"
+sudo -u postgres psql -c "CREATE USER hlvmp WITH PASSWORD 'hlvmppass';"
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE hlvmp TO hlvmp;"
+
+# Start database microservice
+npm start            # Port 3002
+
+# Verify DB_SERVICE_URL and DB_SERVICE_PASSWORD are set in API .env
+# DB_SERVICE_URL=http://localhost:3002
+# DB_SERVICE_PASSWORD=changeme_db_secret
+```
+
+Docker mode is available for development:
+
+```bash
+cd homelab-vm-provisioner-db
+./setup --docker
+./start --docker
+npm run migrate
+npm start            # Start microservice
+```
+
+**Database Microservice Architecture:**
+- The database microservice (port 3002) is an **internal API** used by the main API
+- It is **not exposed to external users** - only the API communicates with it
+- The API uses the database client internally for async job operations (e.g., VM provisioning)
+- Authentication required via `DB_SERVICE_PASSWORD` shared secret for all endpoints except `/health`
 
 ## Code Style Essentials
 

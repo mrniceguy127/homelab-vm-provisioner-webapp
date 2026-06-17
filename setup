@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
+DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
 PROVISIONER_DIR="$API_DIR/homelab-vm-provisioner-cli"
 PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$PROVISIONER_DIR/.venv}"
 INSTALL_DEV=false
@@ -58,6 +59,7 @@ require_path "$PROXY_DIR"
 
 if [[ "$CLIENT_ONLY" == "false" ]]; then
     require_path "$API_DIR"
+    require_path "$DB_DIR"
     require_path "$PROVISIONER_DIR"
     require_path "$PROVISIONER_DIR/setup"
 fi
@@ -83,26 +85,29 @@ fi
 
 # Setup components using their own setup scripts
 if [[ "$CLIENT_ONLY" == "false" ]]; then
+    log "Setting up database"
+    "$DB_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
+    
     log "Setting up API and provisioner"
-    "$API_DIR/setup" "${SETUP_ARGS[@]}"
+    "$API_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 else
-    log "Client-only mode: skipping API setup"
+    log "Client-only mode: skipping database and API setup"
 fi
 
 # Setup client
 log "Setting up client"
 if [[ "$USE_DOCKER" == "true" && "$INSTALL_DEV" == "false" ]]; then
-    "$CLIENT_DIR/setup" --skip-npm --skip-playwright "${SETUP_ARGS[@]}"
+    "$CLIENT_DIR/setup" --skip-npm --skip-playwright ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 else
-    "$CLIENT_DIR/setup" "${SETUP_ARGS[@]}"
+    "$CLIENT_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 fi
 
 # Setup proxy
 log "Setting up proxy"
 if [[ "$USE_DOCKER" == "true" && "$INSTALL_DEV" == "false" ]]; then
-    "$PROXY_DIR/setup" --skip-npm "${SETUP_ARGS[@]}"
+    "$PROXY_DIR/setup" --skip-npm ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 else
-    "$PROXY_DIR/setup" "${SETUP_ARGS[@]}"
+    "$PROXY_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 fi
 
 log "Setup complete"
