@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
 PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
+WORKER_DIR="$ROOT_DIR/homelab-vm-provisioner-worker"
 PROXY_PUBLIC_INDEX="$PROXY_DIR/public/index.html"
 
 # Source .env file if it exists
@@ -19,6 +20,7 @@ ENABLE_CLIENT="${ENABLE_CLIENT:-true}"
 ENABLE_API="${ENABLE_API:-true}"
 ENABLE_DB_SERVICE="${ENABLE_DB_SERVICE:-true}"
 ENABLE_DB="${ENABLE_DB:-true}"
+ENABLE_WORKER="${ENABLE_WORKER:-true}"
 
 PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$API_DIR/homelab-vm-provisioner-cli/.venv}"
 PROVISIONER_PYTHON_BIN="$PROVISIONER_VENV_DIR/bin/python"
@@ -42,13 +44,14 @@ for arg in "$@"; do
             ENABLE_CLIENT=true
             ENABLE_API=false
             ENABLE_DB_SERVICE=false
-            ENABLE_DB=false
+            ENABLE_WORKER=false
             ;;
     esac
 done
 
 # Display enabled services
 printf '==> Starting services with configuration:\n'
+printf '    WORKER:      %s\n' "$ENABLE_WORKER"
 printf '    CLIENT:      %s\n' "$ENABLE_CLIENT"
 printf '    API:         %s\n' "$ENABLE_API"
 printf '    DB_SERVICE:  %s\n' "$ENABLE_DB_SERVICE"
@@ -137,6 +140,25 @@ if [[ "$ENABLE_API" == "true" ]]; then
     API_PID=$!
     PIDS+=("$API_PID")
     sleep 2
+fi
+
+# Start worker if enabled
+if [[ "$ENABLE_WORKER" == "true" ]]; then
+    # Configure path conversion for monorepo mode if PROVISIONER_CLI_PATH is set
+    if [[ -n "${PROVISIONER_CLI_PATH:-}" ]]; then
+        # Convert relative path to absolute from ROOT_DIR, leave absolute paths unchanged
+        if [[ "$PROVISIONER_CLI_PATH" != /* ]]; then
+            export PROVISIONER_CLI_PATH="$ROOT_DIR/$PROVISIONER_CLI_PATH"
+        else
+            export PROVISIONER_CLI_PATH
+        fi
+    fi
+    
+    printf '==> Starting worker daemon\n'
+    "$WORKER_DIR/start" &
+    WORKER_PID=$!
+    PIDS+=("$WORKER_PID")
+    sleep 1
 fi
 
 # Start proxy if client is enabled

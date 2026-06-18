@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Start the worker daemon
+#
+# Usage: ./start [--help]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Parse arguments
+if [[ "${1:-}" == "--help" ]]; then
+  echo "Usage: $0 [--help]"
+  echo ""
+  echo "Start the worker daemon for processing VM provisioning jobs."
+  echo ""
+  echo "Required environment variables:"
+  echo "  HOST_ID                Host identifier for job claiming"
+  echo "  DB_SERVICE_URL         Database microservice URL"
+  echo "  DB_SERVICE_PASSWORD    Database microservice password"
+  echo ""
+  echo "Optional environment variables:"
+  echo "  PROVISIONER_CLI_PATH    Path to provisioner CLI (defaults to PATH)"
+  echo "  WORKER_ID              Worker identifier (auto-generated if not set)"
+  echo "  PROVISIONER_CONCURRENCY Maximum concurrent jobs (default: 1)"
+  echo "  WORKER_POLL_INTERVAL   Poll interval in seconds (default: 5.0)"
+  exit 0
+fi
+
+# Load .env if it exists
+if [[ -f .env ]]; then
+  set -a
+  source .env
+  set +a
+fi
+
+# Check required environment variables
+if [[ -z "${HOST_ID:-}" ]]; then
+  echo "Error: HOST_ID environment variable is required"
+  echo "Set it in .env or export it before running this script"
+  exit 1
+fi
+
+if [[ -z "${DB_SERVICE_URL:-}" ]]; then
+  echo "Error: DB_SERVICE_URL environment variable is required"
+  echo "Set it in .env or export it before running this script"
+  exit 1
+fi
+
+if [[ -z "${DB_SERVICE_PASSWORD:-}" ]]; then
+  echo "Error: DB_SERVICE_PASSWORD environment variable is required"
+  echo "Set it in .env or export it before running this script"
+  exit 1
+fi
+
+# Activate virtual environment
+VENV_DIR=".venv"
+if [[ ! -d "$VENV_DIR" ]]; then
+  echo "Error: Virtual environment not found at $VENV_DIR"
+  echo "Run ./setup first to initialize the environment"
+  exit 1
+fi
+
+source "$VENV_DIR/bin/activate"
+
+echo "Starting worker daemon..."
+echo "  Host ID: $HOST_ID"
+echo "  Worker ID: ${WORKER_ID:-auto-generated}"
+echo "  Concurrency: ${PROVISIONER_CONCURRENCY:-1}"
+echo "  Poll interval: ${WORKER_POLL_INTERVAL:-5.0}s"
+echo "  Provisioner CLI: ${PROVISIONER_CLI_PATH:-PATH lookup}"
+echo ""
+
+# Run worker daemon
+exec python3 -m hlvmp_worker.worker

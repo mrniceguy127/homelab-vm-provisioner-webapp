@@ -40,7 +40,7 @@ Browser → Proxy (port 3000) → API (port 3001) → Python CLI → libvirt
 |- setup                 # Orchestrates all component setups
 |- build                 # Orchestrates all builds
 |- start                 # Starts all services
-|- test-all              # Runs all tests
+|- test                  # Runs all tests (supports --cli, --worker, --api, --client flags)
 |- scripts/
 |  `- test-docker-mode   # Test Docker setup
 `- README.md
@@ -270,7 +270,7 @@ export ENABLE_CLIENT=true ENABLE_API=false
 - `./homelab-vm-provisioner-client/build`: standalone script to build only client static files with Docker
 - `./homelab-vm-provisioner-proxy/build`: builds the proxy Docker image
 - `./homelab-vm-provisioner-db/build --docker`: builds the database Docker image
-- `./test-all`: runs all tests with coverage across Python CLI, API, and client
+- `./test`: runs all tests with coverage across Python CLI, Worker, API, and Client (supports `--cli`, `--worker`, `--api`, `--client` flags for selective testing, or `--env` to test only components enabled in `.env`)
 - `./start`: starts enabled services (controlled by ENABLE_* variables in .env)
 - `./start --docker`: starts services with Docker proxy (controlled by ENABLE_* variables)
 - `./homelab-vm-provisioner-proxy/start`: runs the proxy in a Docker container (requires static files in `public/`)
@@ -546,7 +546,9 @@ This runs:
 To run tests across all subprojects and see a consolidated coverage report:
 
 ```bash
-./test-all
+./test              # Run all tests
+./test --cli        # Run only CLI tests
+./test --worker     # Run only Worker tests
 ```
 
 This runs:

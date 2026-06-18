@@ -1,0 +1,4 @@
+
+[dev]
+ruff>=0.1.0
+coverage>=7.0.0

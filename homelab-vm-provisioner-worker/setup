@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Setup script for homelab-vm-provisioner-worker
+#
+# Usage: ./setup [--skip-system-packages] [--dev]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Parse arguments
+SKIP_SYSTEM_PACKAGES=0
+INSTALL_DEV=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-system-packages)
+      SKIP_SYSTEM_PACKAGES=1
+      shift
+      ;;
+    --dev)
+      INSTALL_DEV=1
+      shift
+      ;;
+    --help)
+      echo "Usage: $0 [--skip-system-packages] [--dev]"
+      echo ""
+      echo "Options:"
+      echo "  --skip-system-packages  Skip system package installation"
+      echo "  --dev                   Install development dependencies"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Use --help for usage information"
+      exit 1
+      ;;
+  esac
+done
+
+# System packages
+if [[ $SKIP_SYSTEM_PACKAGES -eq 0 ]]; then
+  echo "==> Installing system packages"
+  
+  if [[ -f /etc/os-release ]]; then
+    # Linux
+    . /etc/os-release
+    case "$ID" in
+      ubuntu|debian)
+        echo "Detected Debian/Ubuntu"
+        sudo apt-get update
+        sudo apt-get install -y python3 python3-pip python3-venv
+        ;;
+      fedora|rhel|centos)
+        echo "Detected Fedora/RHEL/CentOS"
+        sudo dnf install -y python3 python3-pip
+        ;;
+      arch)
+        echo "Detected Arch Linux"
+        sudo pacman -S --needed python python-pip
+        ;;
+      *)
+        echo "Warning: Unsupported Linux distribution: $ID"
+        echo "Please ensure Python 3.9+ is installed"
+        ;;
+    esac
+  elif [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    echo "Detected macOS - assuming Python 3 is already installed"
+    if ! command -v python3 &> /dev/null; then
+      echo "Error: python3 not found. Please install Python 3.9+ using Homebrew:"
+      echo "  brew install python@3.11"
+      exit 1
+    fi
+  else
+    echo "Unsupported distro: missing /etc/os-release"
+  fi
+else
+  echo "==> Skipping system package installation"
+fi
+
+# Python virtual environment
+VENV_DIR=".venv"
+
+if [[ ! -d "$VENV_DIR" ]]; then
+  echo "==> Creating Python virtual environment"
+  python3 -m venv "$VENV_DIR"
+fi
+
+# Activate virtual environment
+source "$VENV_DIR/bin/activate"
+
+# Install Python package
+echo "==> Installing Python package"
+pip install --upgrade pip
+pip install -e .
+
+# Install dev dependencies
+if [[ $INSTALL_DEV -eq 1 ]]; then
+  echo "==> Installing development dependencies"
+  pip install -e ".[dev]"
+fi
+
+echo ""
+echo "Setup complete!"
+echo ""
+echo "To activate the virtual environment:"
+echo "  source $VENV_DIR/bin/activate"
+echo ""
+echo "To start the worker:"
+echo "  ./start"

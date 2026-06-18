@@ -6,6 +6,7 @@ API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
 DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
+WORKER_DIR="$ROOT_DIR/homelab-vm-provisioner-worker"
 PROVISIONER_DIR="$API_DIR/homelab-vm-provisioner-cli"
 PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$PROVISIONER_DIR/.venv}"
 INSTALL_DEV=false
@@ -22,6 +23,7 @@ ENABLE_CLIENT="${ENABLE_CLIENT:-true}"
 ENABLE_API="${ENABLE_API:-true}"
 ENABLE_DB_SERVICE="${ENABLE_DB_SERVICE:-true}"
 ENABLE_DB="${ENABLE_DB:-true}"
+ENABLE_WORKER="${ENABLE_WORKER:-true}"
 
 # Parse arguments
 USE_DOCKER=false
@@ -44,6 +46,7 @@ for arg in "$@"; do
             ENABLE_API=false
             ENABLE_DB_SERVICE=false
             ENABLE_DB=false
+            ENABLE_WORKER=false
             ;;
         *)
             SETUP_ARGS+=("$arg")
@@ -72,6 +75,7 @@ require_path() {
 
 # Display enabled services
 log "Build mode configuration:"
+log "  WORKER:      $ENABLE_WORKER"
 log "  CLIENT:      $ENABLE_CLIENT"
 log "  API:         $ENABLE_API"
 log "  DB_SERVICE:  $ENABLE_DB_SERVICE"
@@ -133,6 +137,11 @@ fi
 if [[ "$ENABLE_API" == "true" ]]; then
     log "Setting up API and provisioner"
     "$API_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
+fi
+
+if [[ "$ENABLE_WORKER" == "true" ]]; then
+    log "Setting up worker daemon"
+    "$WORKER_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 fi
 
 # Setup client

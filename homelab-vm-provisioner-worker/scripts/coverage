@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+COVERAGE_DIR="$ROOT_DIR/.build/coverage"
+
+# Activate virtual environment
+if [[ ! -d "$ROOT_DIR/.venv" ]]; then
+    printf 'Virtual environment not found. Run ./setup --dev first.\n' >&2
+    exit 1
+fi
+
+source "$ROOT_DIR/.venv/bin/activate"
+
+# Check for coverage
+if ! python -m coverage --version >/dev/null 2>&1; then
+    printf 'Coverage is unavailable. Run ./setup --dev to install dev dependencies.\n' >&2
+    exit 1
+fi
+
+# Run linting before tests
+if ! python -m ruff --version >/dev/null 2>&1; then
+    printf 'Warning: Ruff is unavailable. Run ./setup --dev to install dev dependencies.\n' >&2
+else
+    python -m ruff check "$ROOT_DIR/hlvmp_worker" "$ROOT_DIR/tests" || exit 1
+fi
+
+# Create coverage directory
+mkdir -p "$COVERAGE_DIR"
+export COVERAGE_FILE="$COVERAGE_DIR/.coverage"
+
+# Run tests with coverage
+python -m coverage run --rcfile "$ROOT_DIR/pyproject.toml" -m unittest discover -s "$ROOT_DIR/tests"
+
+# Generate reports
+python -m coverage report --rcfile "$ROOT_DIR/pyproject.toml"
+python -m coverage html --rcfile "$ROOT_DIR/pyproject.toml" -d "$COVERAGE_DIR/html"
+python -m coverage xml --rcfile "$ROOT_DIR/pyproject.toml" -o "$COVERAGE_DIR/coverage.xml"
+
+echo ""
+echo "Coverage report generated in $COVERAGE_DIR/html/index.html"
