@@ -57,6 +57,7 @@ if [[ "$DOCKER_MODE" == true ]]; then
         log "Database container is already running"
         log "Container: hlvmp-db"
         log "Microservice Port: ${DB_SERVICE_PORT:-3002}"
+        log "PostgreSQL Port: ${POSTGRES_PORT:-5432}"
         log ""
         log "To restart:"
         log "  docker stop hlvmp-db"
@@ -64,15 +65,31 @@ if [[ "$DOCKER_MODE" == true ]]; then
         exit 0
     fi
     
+    # Service mode configuration
+    ENABLE_DB="${ENABLE_DB:-true}"
+    ENABLE_DB_SERVICE="${ENABLE_DB_SERVICE:-true}"
     DB_SERVICE_PORT="${DB_SERVICE_PORT:-3002}"
+    POSTGRES_PORT="${POSTGRES_PORT:-5432}"
     POSTGRES_USER="${POSTGRES_USER:-hlvmp}"
     POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-hlvmppass}"
     POSTGRES_DB="${POSTGRES_DB:-hlvmp}"
     
-    log "Starting database container (PostgreSQL + microservice)"
+    log "Starting database container"
     log "  Container: hlvmp-db"
-    log "  Microservice Port: $DB_SERVICE_PORT (exposed)"
-    log "  PostgreSQL Port: 5432 (internal only)"
+    log "  ENABLE_DB: $ENABLE_DB"
+    log "  ENABLE_DB_SERVICE: $ENABLE_DB_SERVICE"
+    
+    # Build port mappings based on enabled services
+    PORT_MAPPINGS=()
+    if [[ "$ENABLE_DB_SERVICE" == "true" ]]; then
+        PORT_MAPPINGS+=("-p" "$DB_SERVICE_PORT:$DB_SERVICE_PORT")
+        log "  Microservice Port: $DB_SERVICE_PORT (exposed)"
+    fi
+    if [[ "$ENABLE_DB" == "true" ]]; then
+        PORT_MAPPINGS+=("-p" "$POSTGRES_PORT:5432")
+        log "  PostgreSQL Port: $POSTGRES_PORT (exposed)"
+    fi
+    
     log "  Database: $POSTGRES_DB"
     log "  User: $POSTGRES_USER"
     log "  Volume: hlvmp-postgres-data"
@@ -80,24 +97,43 @@ if [[ "$DOCKER_MODE" == true ]]; then
     docker run -d \
         --name hlvmp-db \
         --restart unless-stopped \
+        -e ENABLE_DB="$ENABLE_DB" \
+        -e ENABLE_DB_SERVICE="$ENABLE_DB_SERVICE" \
         -e POSTGRES_USER="$POSTGRES_USER" \
         -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
         -e POSTGRES_DB="$POSTGRES_DB" \
         -e PGDATA=/var/lib/postgresql/data \
         -e DB_SERVICE_PORT="$DB_SERVICE_PORT" \
-        -p "$DB_SERVICE_PORT:$DB_SERVICE_PORT" \
+        "${PORT_MAPPINGS[@]}" \
         -v hlvmp-postgres-data:/var/lib/postgresql/data \
         hlvmp-db:latest
     
     log ""
     log "Database container started successfully"
     log ""
-    log "The container includes:"
-    log "  • PostgreSQL 17 (internal, port 5432)"
-    log "  • DB Microservice (exposed, port $DB_SERVICE_PORT)"
-    log ""
-    log "Microservice URL:"
-    log "  http://localhost:$DB_SERVICE_PORT"
+    if [[ "$ENABLE_DB" == "true" && "$ENABLE_DB_SERVICE" == "true" ]]; then
+        log "The container includes:"
+        log "  • PostgreSQL 17 (exposed, port $POSTGRES_PORT)"
+        log "  • DB Microservice (exposed, port $DB_SERVICE_PORT)"
+        log ""
+        log "PostgreSQL connection:"
+        log "  postgresql://$POSTGRES_USER:***@localhost:$POSTGRES_PORT/$POSTGRES_DB"
+        log ""
+        log "Microservice URL:"
+        log "  http://localhost:$DB_SERVICE_PORT"
+    elif [[ "$ENABLE_DB" == "true" ]]; then
+        log "The container includes:"
+        log "  • PostgreSQL 17 (exposed, port $POSTGRES_PORT)"
+        log ""
+        log "PostgreSQL connection:"
+        log "  postgresql://$POSTGRES_USER:***@localhost:$POSTGRES_PORT/$POSTGRES_DB"
+    else
+        log "The container includes:"
+        log "  • DB Microservice (exposed, port $DB_SERVICE_PORT)"
+        log ""
+        log "Microservice URL:"
+        log "  http://localhost:$DB_SERVICE_PORT"
+    fi
     log ""
     log "Migrations run automatically on container startup."
     log ""

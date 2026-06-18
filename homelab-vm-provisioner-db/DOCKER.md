@@ -1,14 +1,32 @@
 # Docker Mode: Database Microservice
 
-This document describes the Docker mode for the database microservice, which runs PostgreSQL and the Node.js microservice in a single container.
+This document describes the Docker mode for the database microservice, which can run PostgreSQL and/or the Node.js microservice in a single container.
 
 ## Architecture
 
 In Docker mode:
-- PostgreSQL 17 runs on port 5432 **inside the container only**
-- Database microservice runs on port 3002 and is **exposed to the host**
-- Migrations run automatically when the container starts
+- PostgreSQL 17 runs on port 5432 **and can be exposed to the host**
+- Database microservice runs on port 3002 **and can be exposed to the host**
+- Migrations run automatically when the container starts (if PostgreSQL is enabled)
 - Data persists in a named Docker volume
+- Services can be enabled/disabled independently via environment variables
+
+## Service Modes
+
+The container supports three deployment modes via environment variables:
+
+1. **Full Mode (default)**: Both PostgreSQL and microservice
+   - `ENABLE_DB=true` and `ENABLE_DB_SERVICE=true`
+   - Exposes both ports: 5432 (PostgreSQL) and 3002 (microservice)
+
+2. **Database Only**: PostgreSQL without microservice
+   - `ENABLE_DB=true` and `ENABLE_DB_SERVICE=false`
+   - Exposes only port 5432 (PostgreSQL)
+
+3. **Microservice Only**: Microservice without PostgreSQL
+   - `ENABLE_DB=false` and `ENABLE_DB_SERVICE=true`
+   - Exposes only port 3002 (microservice)
+   - Requires external PostgreSQL connection via `DATABASE_URL`
 
 ## Quick Start
 
@@ -18,17 +36,41 @@ cd homelab-vm-provisioner-db
 # Build image
 ./build --docker
 
-# Start container
+# Start container (full mode: PostgreSQL + microservice)
 ./start --docker
 
 # Verify health
 curl http://localhost:3002/health
+
+# Connect to PostgreSQL directly
+psql postgresql://hlvmp:hlvmppass@localhost:5432/hlvmp
 
 # View logs
 docker logs hlvmp-db
 
 # Stop container
 docker stop hlvmp-db
+```
+
+## Service Mode Configuration
+
+Set environment variables in `.env` to control which services run:
+
+```bash
+# Full mode (default) - both services
+ENABLE_DB=true
+ENABLE_DB_SERVICE=true
+s:** 
+- 3002 (microservice, when ENABLE_DB_SERVICE=true)
+- 5432 (PostgreSQL, when ENABLE_DB=true
+# Database only mode
+ENABLE_DB=true
+ENABLE_DB_SERVICE=false
+
+# Microservice only mode (requires external PostgreSQL)
+ENABLE_DB=false
+ENABLE_DB_SERVICE=true
+DATABASE_URL=postgresql://user:pass@external-host:5432/dbname
 ```
 
 ## Image Details
@@ -49,16 +91,26 @@ docker stop hlvmp-db
 ## Environment Variables
 
 Configure via `.env` file:
+Service mode (default: both enabled)
+ENABLE_DB=true              # Enable PostgreSQL
+ENABLE_DB_SERVICE=true      # Enable microservice
 
-```bash
-# Microservice port (exposed)
+# Microservice port (exposed when ENABLE_DB_SERVICE=true)
 DB_SERVICE_PORT=3002
+
+# PostgreSQL port mapping (exposed when ENABLE_DB=true)
+POSTGRES_PORT=5432
 
 # Microservice authentication (shared secret)
 DB_SERVICE_PASSWORD=changeme_db_secret
 
-# PostgreSQL credentials (internal)
+# PostgreSQL credentials (internal or exposed based on ENABLE_DB)
 POSTGRES_USER=hlvmp
+POSTGRES_PASSWORD=hlvmppass
+POSTGRES_DB=hlvmp
+
+# Database connection URL (required when ENABLE_DB=false)
+DATABASE_URL=postgresql://hlvmp:hlvmppass@localhost:5432/R=hlvmp
 POSTGRES_PASSWORD=hlvmppass
 POSTGRES_DB=hlvmp
 ```
@@ -73,13 +125,29 @@ POSTGRES_DB=hlvmp
 
 Builds the `hlvmp-db:latest` image with:
 - PostgreSQL 17 from base image
-- Node.js 20.x installed via apt
-- Application code copied
-- Custom entrypoint script
+- Node.js 20.x installed v (depends on enabled services):
 
-### Start Container
+**Full mode (ENABLE_DB=true, ENABLE_DB_SERVICE=true):**
+1. Initialize PostgreSQL data directory (if first run)
+2. Start PostgreSQL server
+3. Wait for PostgreSQL to be ready
+4. Create database if it doesn't exist
+5. Run pending migrations
+6. Start microservice on port 3002
+7. Expose both ports 5432 and 3002
 
-```bash
+**Database only mode (ENABLE_DB=true, ENABLE_DB_SERVICE=false):**
+1. Initialize PostgreSQL data directory (if first run)
+2. Start PostgreSQL server
+3. Wait for PostgreSQL to be ready
+4. Create database if it doesn't exist
+5. Run pending migrations
+6. Expose port 5432
+
+**Microservice only mode (ENABLE_DB=false, ENABLE_DB_SERVICE=true):**
+1. Connect to external PostgreSQL via DATABASE_URL
+2. Start microservice on port 3002
+3. Expose
 ./start --docker
 ```
 

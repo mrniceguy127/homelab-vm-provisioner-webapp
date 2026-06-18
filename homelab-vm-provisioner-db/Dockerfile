@@ -26,8 +26,8 @@ COPY migrations/ ./migrations/
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# Expose only the microservice port (NOT PostgreSQL port)
-EXPOSE 3002
+# Expose microservice port (3002) and PostgreSQL port (5432)
+EXPOSE 3002 5432
 
-# Use custom entrypoint that starts both PostgreSQL and the microservice
+# Use custom entrypoint that starts PostgreSQL and/or the microservice
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

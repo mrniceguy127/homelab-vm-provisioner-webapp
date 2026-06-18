@@ -15,14 +15,23 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
     set +a
 fi
 
+# Build mode defaults (can be overridden by .env)
+ENABLE_CLIENT="${ENABLE_CLIENT:-true}"
+ENABLE_API="${ENABLE_API:-true}"
+ENABLE_DB_SERVICE="${ENABLE_DB_SERVICE:-true}"
+ENABLE_DB="${ENABLE_DB:-true}"
+
 # Parse arguments
-CLIENT_ONLY=false
 USE_DOCKER=false
 BUILD_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --client-only)
-            CLIENT_ONLY=true
+            # Legacy flag support - sets mode flags
+            ENABLE_CLIENT=true
+            ENABLE_API=false
+            ENABLE_DB_SERVICE=false
+            ENABLE_DB=false
             ;;
         --docker)
             USE_DOCKER=true
@@ -38,31 +47,41 @@ log() {
     printf '==> %s\n' "$*"
 }
 
+# Display enabled services
+log "Build mode configuration:"
+log "  CLIENT:      $ENABLE_CLIENT"
+log "  API:         $ENABLE_API"
+log "  DB_SERVICE:  $ENABLE_DB_SERVICE"
+log "  DB:          $ENABLE_DB"
+log ""
+
 # Build components
-if [[ "$CLIENT_ONLY" == "false" ]]; then
+if [[ "$ENABLE_DB" == "true" || "$ENABLE_DB_SERVICE" == "true" ]]; then
     log "Building database"
     "$DB_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
-    
-    log "Building API"
-    "$API_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
-else
-    log "Client-only mode: skipping database and API build"
 fi
 
-log "Building client"
-"$CLIENT_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
+if [[ "$ENABLE_API" == "true" ]]; then
+    log "Building API"
+    "$API_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
+fi
 
-# Wire up client artifacts to proxy
-log "Deploying client artifacts to proxy"
-rm -rf "$PROXY_PUBLIC_DIR"
-mkdir -p "$PROXY_PUBLIC_DIR"
-cp -R "$CLIENT_DIR/dist/." "$PROXY_PUBLIC_DIR/"
-log "Client files deployed to: $PROXY_PUBLIC_DIR"
+if [[ "$ENABLE_CLIENT" == "true" ]]; then
+    log "Building client"
+    "$CLIENT_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
 
-# Build proxy Docker image if in Docker mode
-if [[ "$USE_DOCKER" == "true" ]]; then
-    log "Building proxy Docker image"
-    "$PROXY_DIR/build" --docker
+    # Wire up client artifacts to proxy
+    log "Deploying client artifacts to proxy"
+    rm -rf "$PROXY_PUBLIC_DIR"
+    mkdir -p "$PROXY_PUBLIC_DIR"
+    cp -R "$CLIENT_DIR/dist/." "$PROXY_PUBLIC_DIR/"
+    log "Client files deployed to: $PROXY_PUBLIC_DIR"
+
+    # Build proxy Docker image if in Docker mode
+    if [[ "$USE_DOCKER" == "true" ]]; then
+        log "Building proxy Docker image"
+        "$PROXY_DIR/build" --docker
+    fi
 fi
 
 log "Workspace build complete"

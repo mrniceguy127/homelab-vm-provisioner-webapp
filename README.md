@@ -174,24 +174,109 @@ Example:
 
 The root project mostly works out of the box. The main configuration points are the root scripts and a small set of environment variables.
 
+### Build Modes
+
+The monorepo supports flexible deployment modes controlled by environment variables in `.env`. This allows you to enable/disable specific services:
+
+**Environment variables:**
+```bash
+ENABLE_CLIENT=true       # React frontend + reverse proxy
+ENABLE_API=true          # Express API + Python provisioner  
+ENABLE_DB_SERVICE=true   # Node.js microservice for job queue
+ENABLE_DB=true           # PostgreSQL database
+```
+
+**Common deployment modes:**
+
+1. **Full stack (default)**: All services enabled
+   ```bash
+   # All variables true (default)
+   ./setup && ./build && ./start
+   ```
+
+2. **Client only**: Frontend connecting to remote API
+   ```bash
+   ENABLE_CLIENT=true
+   ENABLE_API=false
+   ENABLE_DB_SERVICE=false
+   ENABLE_DB=false
+   
+   # Or use legacy flag:
+   ./setup --client-only
+   ./build --client-only
+   PROXY_API_HOST=http://remote-api:3001 ./start --client-only
+   ```
+
+3. **API only**: Backend without frontend
+   ```bash
+   ENABLE_CLIENT=false
+   ENABLE_API=true
+   ENABLE_DB_SERVICE=true
+   ENABLE_DB=true
+   
+   ./setup && ./build && ./start
+   # API on port 3001, DB service on 3002
+   ```
+
+4. **Database standalone**: PostgreSQL + microservice only
+   ```bash
+   ENABLE_CLIENT=false
+   ENABLE_API=false
+   ENABLE_DB_SERVICE=true
+   ENABLE_DB=true
+   
+   cd homelab-vm-provisioner-db
+   ./setup && ./build --docker && ./start --docker
+   ```
+
+5. **Database service only**: Microservice without PostgreSQL (requires external DB)
+   ```bash
+   ENABLE_DB_SERVICE=true
+   ENABLE_DB=false
+   DATABASE_URL=postgresql://user:pass@external-host:5432/dbname
+   
+   # Microservice connects to external PostgreSQL
+   ```
+
+6. **PostgreSQL only**: Database without microservice
+   ```bash
+   ENABLE_DB=true
+   ENABLE_DB_SERVICE=false
+   
+   # Exposes PostgreSQL port 5432
+   ```
+
+**Setting modes:** Copy `.env.example` to `.env` and set the desired flags, or export them in your shell:
+
+```bash
+cp .env.example .env
+# Edit .env to set ENABLE_* variables
+
+# Or export directly:
+export ENABLE_CLIENT=true ENABLE_API=false
+./setup && ./build && ./start
+```
+
+**Legacy flag support:** The `--client-only` flag is still supported and automatically sets the appropriate mode flags.
+
 ### Root scripts
 
 - `./setup`: installs dependencies and configures environments (git submodules, Python venv, npm packages, Playwright)
 - `./setup --docker`: setup for Docker mode (skips client and proxy npm installs since they run in containers)
 - `./setup --dev`: setup with dev dependencies for the Python provisioner
 - `./setup --docker --dev`: Docker mode with dev dependencies installed on host for testing
-- `./setup --client-only`: setup for client-only development (skips API/provisioner, installs only client and proxy)
 - `./build`: builds documentation and app artifacts (no tests)
 - `./build --docker`: builds client static files using Docker instead of local Node.js
-- `./build --client-only`: builds only client (skips API docs), useful for frontend-only development
 - `./homelab-vm-provisioner-client/build`: standalone script to build only client static files with Docker
 - `./homelab-vm-provisioner-proxy/build`: builds the proxy Docker image
+- `./homelab-vm-provisioner-db/build --docker`: builds the database Docker image
 - `./test-all`: runs all tests with coverage across Python CLI, API, and client
-- `./start`: starts the API on port 3001 and the proxy on port 3000, serving the already-built client
-- `./start --docker`: starts API locally and proxy in Docker container
-- `./start --client-only`: builds client and starts proxy only (no API), useful for connecting to remote API
-- `./start --client-only --docker`: builds client with Docker and runs proxy in Docker (no API)
+- `./start`: starts enabled services (controlled by ENABLE_* variables in .env)
+- `./start --docker`: starts services with Docker proxy (controlled by ENABLE_* variables)
 - `./homelab-vm-provisioner-proxy/start`: runs the proxy in a Docker container (requires static files in `public/`)
+- `./homelab-vm-provisioner-db/start --docker`: runs PostgreSQL and/or microservice in Docker container
+
+**Note:** Build modes are controlled by environment variables (`ENABLE_CLIENT`, `ENABLE_API`, `ENABLE_DB_SERVICE`, `ENABLE_DB`). See the "Build Modes" section above.
 
 ### Docker commands
 
@@ -199,19 +284,36 @@ The root project mostly works out of the box. The main configuration points are 
 # Setup for Docker mode
 ./setup --docker
 
-# Start with Docker proxy (API on host)
-./start --docker
+# Build Docker images
+./homelab-vm-provisioner-client/build   # Build client static files
+./homelab-vm-provisioner-proxy/build    # Build proxy image
+./homelab-vm-provisioner-db/build --docker  # Build database image
 
-# Or use individual scripts
-./homelab-vm-provisioner-client/build  # Build client static files
-./homelab-vm-provisioner-proxy/build   # Build proxy image
-./homelab-vm-provisioner-proxy/start   # Run proxy container
+# Start services in Docker
+./start --docker                        # All enabled services
+./homelab-vm-provisioner-proxy/start    # Proxy only
+./homelab-vm-provisioner-db/start --docker  # Database service
 ```
 
 ### Client-only workflow (frontend development)
 
 For frontend developers who don't need the full API stack locally:
 
+**Using environment variables (recommended):**
+```bash
+# .env file
+ENABLE_CLIENT=true
+ENABLE_API=false
+ENABLE_DB_SERVICE=false
+ENABLE_DB=false
+PROXY_API_HOST=http://remote-api-server:3001
+
+./setup
+./build
+./start
+```
+
+**Using legacy --client-only flag:**
 ```bash
 # One-time setup (skips Python provisioner and API dependencies)
 ./setup --client-only
