@@ -113,11 +113,16 @@ Run tests:
 
 ```bash
 # Run all tests
-.venv/bin/python -m unittest discover -s tests
+./scripts/test
+
+# Run tests with coverage (requires 80% minimum)
+./scripts/coverage
 
 # Run specific test module
 .venv/bin/python -m unittest tests.test_worker
 ```
+
+**Coverage requirement**: The project enforces 80% minimum test coverage. The `./scripts/coverage` script will fail if coverage drops below this threshold.
 
 ## Deployment
 

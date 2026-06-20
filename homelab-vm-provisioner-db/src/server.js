@@ -2,13 +2,30 @@ import express from 'express';
 import { createRepository } from './repository.js';
 
 const PORT = Number.parseInt(process.env.DB_SERVICE_PORT || '3002', 10);
-const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://hlvmp:hlvmppass@localhost:5432/hlvmp';
-const DB_SERVICE_PASSWORD = process.env.DB_SERVICE_PASSWORD || 'changeme_db_secret';
+const hasModularDatabaseConfig = [
+  'POSTGRES_HOST',
+  'POSTGRES_PORT',
+  'POSTGRES_USER',
+  'POSTGRES_PASSWORD',
+  'POSTGRES_DB',
+].some((key) => Object.hasOwn(process.env, key));
 
-if (!DATABASE_URL) {
-  console.error('Error: DATABASE_URL environment variable is required');
-  process.exit(1);
+function resolveDatabaseUrl() {
+  if (!hasModularDatabaseConfig && process.env.DATABASE_URL) {
+    return process.env.DATABASE_URL;
+  }
+
+  const host = process.env.POSTGRES_HOST || 'localhost';
+  const port = process.env.POSTGRES_PORT || '5432';
+  const user = encodeURIComponent(process.env.POSTGRES_USER || 'hlvmp');
+  const password = encodeURIComponent(process.env.POSTGRES_PASSWORD || 'hlvmppass');
+  const database = encodeURIComponent(process.env.POSTGRES_DB || 'hlvmp');
+
+  return `postgresql://${user}:${password}@${host}:${port}/${database}`;
 }
+
+const DATABASE_URL = resolveDatabaseUrl();
+const DB_SERVICE_PASSWORD = process.env.DB_SERVICE_PASSWORD || 'changeme_db_secret';
 
 if (!DB_SERVICE_PASSWORD) {
   console.error('Error: DB_SERVICE_PASSWORD environment variable is required');

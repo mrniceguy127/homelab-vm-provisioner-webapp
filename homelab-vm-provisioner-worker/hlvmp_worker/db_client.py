@@ -81,7 +81,7 @@ class DatabaseClient:
         """
         try:
             response = self._request("GET", "/health")
-            return response.get("status") == "ok"
+            return response.get("status") == "ok" or response.get("ok") is True
         except Exception:
             return False
 
@@ -123,9 +123,7 @@ class DatabaseClient:
         Raises:
             RuntimeError: If update fails
         """
-        response = self._request(
-            "PUT", f"/jobs/{job_id}/status", {"status": "running", "workerId": worker_id}
-        )
+        response = self._request("POST", f"/jobs/{job_id}/running", {"workerId": worker_id})
         return response["job"]
 
     def mark_job_succeeded(self, job_id: int, result: dict[str, Any]) -> dict[str, Any]:
@@ -141,9 +139,7 @@ class DatabaseClient:
         Raises:
             RuntimeError: If update fails
         """
-        response = self._request(
-            "PUT", f"/jobs/{job_id}/status", {"status": "succeeded", "result": result}
-        )
+        response = self._request("POST", f"/jobs/{job_id}/succeeded", {"result": result})
         return response["job"]
 
     def mark_job_failed(
@@ -163,9 +159,9 @@ class DatabaseClient:
             RuntimeError: If update fails
         """
         response = self._request(
-            "PUT",
-            f"/jobs/{job_id}/status",
-            {"status": "failed", "error": error, "retriable": retriable},
+            "POST",
+            f"/jobs/{job_id}/failed",
+            {"error": error, "retriable": retriable},
         )
         return response["job"]
 
@@ -248,9 +244,7 @@ class DatabaseClient:
         Raises:
             RuntimeError: If release operation fails
         """
-        response = self._request(
-            "DELETE", f"/locks/job/{job_id}", {"workerId": worker_id}
-        )
+        response = self._request("POST", "/locks/release", {"jobId": job_id, "workerId": worker_id})
         return response.get("released", 0)
 
     def list_jobs(

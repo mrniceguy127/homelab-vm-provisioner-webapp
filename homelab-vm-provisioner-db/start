@@ -37,6 +37,43 @@ log() {
     printf '==> %s\n' "$*"
 }
 
+hash_string() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | cut -d' ' -f1
+        return
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 | cut -d' ' -f1
+        return
+    fi
+
+    printf 'Missing command: sha256sum or shasum\n' >&2
+    exit 1
+}
+
+docker_container_exists() {
+    docker inspect "$1" >/dev/null 2>&1
+}
+
+docker_container_running() {
+    [[ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" == "true" ]]
+}
+
+docker_container_image_id() {
+    docker inspect -f '{{.Image}}' "$1" 2>/dev/null || true
+}
+
+docker_container_label() {
+    local container_name="$1"
+    local label_name="$2"
+    docker inspect -f "{{index .Config.Labels \"$label_name\"}}" "$container_name" 2>/dev/null || true
+}
+
+docker_image_id() {
+    docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || true
+}
+
 run_sudo() {
     if [[ "${EUID}" -eq 0 ]]; then
         "$@"
@@ -45,30 +82,48 @@ run_sudo() {
     fi
 }
 
+ensure_sudo_credentials() {
+    local reason="$1"
+
+    if [[ "${EUID}" -eq 0 ]]; then
+        return
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        printf 'sudo is required for this start step but is not installed.\n' >&2
+        exit 1
+    fi
+
+    if sudo -n -v >/dev/null 2>&1; then
+        return
+    fi
+
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        printf '%s\n' "$reason" >&2
+        printf 'Run this script from an interactive terminal or pre-authorize sudo with `sudo -v` first.\n' >&2
+        exit 1
+    fi
+
+    log "$reason"
+    sudo -v
+}
+
 if [[ "$DOCKER_MODE" == true ]]; then
     # Docker mode: start combined PostgreSQL + microservice container
     if ! command -v docker >/dev/null 2>&1; then
         log "Error: Docker not found. Install Docker Engine."
         exit 1
     fi
-    
-    # Check if container is already running
-    if docker ps --filter "name=hlvmp-db" --format '{{.Names}}' | grep -q '^hlvmp-db$'; then
-        log "Database container is already running"
-        log "Container: hlvmp-db"
-        log "Microservice Port: ${DB_SERVICE_PORT:-3002}"
-        log "PostgreSQL Port: ${POSTGRES_PORT:-5432}"
-        log ""
-        log "To restart:"
-        log "  docker stop hlvmp-db"
-        log "  ./start --docker"
-        exit 0
-    fi
-    
+
     # Service mode configuration
     ENABLE_DB="${ENABLE_DB:-true}"
     ENABLE_DB_SERVICE="${ENABLE_DB_SERVICE:-true}"
     DB_SERVICE_PORT="${DB_SERVICE_PORT:-3002}"
+    HAS_MODULAR_DB_ENV=false
+    if [[ -n "${POSTGRES_HOST+x}" || -n "${POSTGRES_PORT+x}" || -n "${POSTGRES_USER+x}" || -n "${POSTGRES_PASSWORD+x}" || -n "${POSTGRES_DB+x}" ]]; then
+        HAS_MODULAR_DB_ENV=true
+    fi
+    POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
     POSTGRES_PORT="${POSTGRES_PORT:-5432}"
     POSTGRES_USER="${POSTGRES_USER:-hlvmp}"
     POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-hlvmppass}"
@@ -93,17 +148,81 @@ if [[ "$DOCKER_MODE" == true ]]; then
     log "  Database: $POSTGRES_DB"
     log "  User: $POSTGRES_USER"
     log "  Volume: hlvmp-postgres-data"
+
+    DOCKER_ENV_ARGS=(
+        -e ENABLE_DB="$ENABLE_DB"
+        -e ENABLE_DB_SERVICE="$ENABLE_DB_SERVICE"
+        -e PGDATA=/var/lib/postgresql/data
+        -e DB_SERVICE_PORT="$DB_SERVICE_PORT"
+    )
+
+    if [[ "$ENABLE_DB" == "true" || "$HAS_MODULAR_DB_ENV" == "true" ]]; then
+        DOCKER_ENV_ARGS+=(
+            -e POSTGRES_HOST="$POSTGRES_HOST"
+            -e POSTGRES_PORT="$POSTGRES_PORT"
+            -e POSTGRES_USER="$POSTGRES_USER"
+            -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+            -e POSTGRES_DB="$POSTGRES_DB"
+        )
+    fi
+
+    if [[ -n "${DB_SERVICE_PASSWORD:-}" ]]; then
+        DOCKER_ENV_ARGS+=("-e" "DB_SERVICE_PASSWORD=$DB_SERVICE_PASSWORD")
+    fi
+
+    if [[ -n "${DATABASE_URL:-}" ]]; then
+        DOCKER_ENV_ARGS+=("-e" "DATABASE_URL=$DATABASE_URL")
+    fi
+
+    DESIRED_IMAGE_ID="$(docker_image_id hlvmp-db:latest)"
+    if [[ -z "$DESIRED_IMAGE_ID" ]]; then
+        log "Error: hlvmp-db:latest image not found. Run ./build --docker first."
+        exit 1
+    fi
+
+    DESIRED_CONFIG_HASH="$({
+        printf 'ENABLE_DB=%s\n' "$ENABLE_DB"
+        printf 'ENABLE_DB_SERVICE=%s\n' "$ENABLE_DB_SERVICE"
+        printf 'DB_SERVICE_PORT=%s\n' "$DB_SERVICE_PORT"
+        printf 'POSTGRES_HOST=%s\n' "$POSTGRES_HOST"
+        printf 'POSTGRES_PORT=%s\n' "$POSTGRES_PORT"
+        printf 'POSTGRES_USER=%s\n' "$POSTGRES_USER"
+        printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+        printf 'POSTGRES_DB=%s\n' "$POSTGRES_DB"
+        printf 'DB_SERVICE_PASSWORD=%s\n' "${DB_SERVICE_PASSWORD:-}"
+        printf 'DATABASE_URL=%s\n' "${DATABASE_URL:-}"
+        printf 'VOLUME=%s\n' 'hlvmp-postgres-data:/var/lib/postgresql/data'
+    } | hash_string)"
+
+    if docker_container_exists hlvmp-db; then
+        CURRENT_IMAGE_ID="$(docker_container_image_id hlvmp-db)"
+        CURRENT_CONFIG_HASH="$(docker_container_label hlvmp-db hlvmp.config-hash)"
+
+        if [[ "$CURRENT_IMAGE_ID" == "$DESIRED_IMAGE_ID" && "$CURRENT_CONFIG_HASH" == "$DESIRED_CONFIG_HASH" ]]; then
+            if docker_container_running hlvmp-db; then
+                log "Database container is already running and up to date"
+                log "Container: hlvmp-db"
+                log "Microservice Port: $DB_SERVICE_PORT"
+                log "PostgreSQL Port: $POSTGRES_PORT"
+                exit 0
+            fi
+
+            log "Starting existing up-to-date database container"
+            docker start hlvmp-db >/dev/null
+            log "Database container started successfully"
+            exit 0
+        fi
+
+        log "Existing database container is out of date; recreating it"
+        docker rm -f hlvmp-db >/dev/null 2>&1 || true
+    fi
     
     docker run -d \
         --name hlvmp-db \
         --restart unless-stopped \
-        -e ENABLE_DB="$ENABLE_DB" \
-        -e ENABLE_DB_SERVICE="$ENABLE_DB_SERVICE" \
-        -e POSTGRES_USER="$POSTGRES_USER" \
-        -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-        -e POSTGRES_DB="$POSTGRES_DB" \
-        -e PGDATA=/var/lib/postgresql/data \
-        -e DB_SERVICE_PORT="$DB_SERVICE_PORT" \
+        --label hlvmp.project=homelab-vm-provisioner \
+        --label "hlvmp.config-hash=$DESIRED_CONFIG_HASH" \
+        "${DOCKER_ENV_ARGS[@]}" \
         "${PORT_MAPPINGS[@]}" \
         -v hlvmp-postgres-data:/var/lib/postgresql/data \
         hlvmp-db:latest
@@ -147,6 +266,7 @@ if [[ "$DOCKER_MODE" == true ]]; then
     log "  docker stop hlvmp-db"
 else
     # Native mode
+    ensure_sudo_credentials "Starting native PostgreSQL requires sudo access. Confirm it now before the service manager command runs."
     log "Starting native PostgreSQL service"
     
     if command -v systemctl >/dev/null 2>&1; then
@@ -191,16 +311,24 @@ else
     log ""
     log "PostgreSQL started successfully"
     log ""
-    log "Default connection (modify .env to customize):"
-    log "  DATABASE_URL=postgresql://postgres:@localhost:5432/postgres"
+    log "Default connection settings (modify .env to customize):"
+    log "  POSTGRES_HOST=localhost"
+    log "  POSTGRES_PORT=5432"
+    log "  POSTGRES_USER=postgres"
+    log "  POSTGRES_PASSWORD="
+    log "  POSTGRES_DB=postgres"
     log ""
     log "Create database and user:"
     log "  sudo -u postgres psql -c \"CREATE DATABASE hlvmp;\""
     log "  sudo -u postgres psql -c \"CREATE USER hlvmp WITH PASSWORD 'hlvmppass';\""
     log "  sudo -u postgres psql -c \"GRANT ALL PRIVILEGES ON DATABASE hlvmp TO hlvmp;\""
     log ""
-    log "Then set DATABASE_URL in .env:"
-    log "  DATABASE_URL=postgresql://hlvmp:hlvmppass@localhost:5432/hlvmp"
+    log "Then set database connection values in .env:"
+    log "  POSTGRES_HOST=localhost"
+    log "  POSTGRES_PORT=5432"
+    log "  POSTGRES_USER=hlvmp"
+    log "  POSTGRES_PASSWORD=hlvmppass"
+    log "  POSTGRES_DB=hlvmp"
     log ""
     log "Run migrations:"
     log "  npm run migrate"

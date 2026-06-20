@@ -38,9 +38,48 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+log() {
+  printf '==> %s\n' "$*"
+}
+
+run_sudo() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+ensure_sudo_credentials() {
+  local reason="$1"
+
+  if [[ "${EUID}" -eq 0 ]]; then
+    return
+  fi
+
+  if ! command -v sudo >/dev/null 2>&1; then
+    printf 'sudo is required for this setup step but is not installed.\n' >&2
+    exit 1
+  fi
+
+  if sudo -n -v >/dev/null 2>&1; then
+    return
+  fi
+
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    printf '%s\n' "$reason" >&2
+    printf 'Run this script from an interactive terminal or pre-authorize sudo with `sudo -v` first.\n' >&2
+    exit 1
+  fi
+
+  log "$reason"
+  sudo -v
+}
+
 # System packages
 if [[ $SKIP_SYSTEM_PACKAGES -eq 0 ]]; then
-  echo "==> Installing system packages"
+  ensure_sudo_credentials "Installing worker system packages requires sudo access. Confirm it now before package installation begins."
+  log "Installing system packages"
   
   if [[ -f /etc/os-release ]]; then
     # Linux
@@ -48,16 +87,16 @@ if [[ $SKIP_SYSTEM_PACKAGES -eq 0 ]]; then
     case "$ID" in
       ubuntu|debian)
         echo "Detected Debian/Ubuntu"
-        sudo apt-get update
-        sudo apt-get install -y python3 python3-pip python3-venv
+        run_sudo apt-get update
+        run_sudo apt-get install -y python3 python3-pip python3-venv
         ;;
       fedora|rhel|centos)
         echo "Detected Fedora/RHEL/CentOS"
-        sudo dnf install -y python3 python3-pip
+        run_sudo dnf install -y python3 python3-pip
         ;;
       arch)
         echo "Detected Arch Linux"
-        sudo pacman -S --needed python python-pip
+        run_sudo pacman -S --needed python python-pip
         ;;
       *)
         echo "Warning: Unsupported Linux distribution: $ID"

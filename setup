@@ -7,7 +7,12 @@ CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
 DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
 WORKER_DIR="$ROOT_DIR/homelab-vm-provisioner-worker"
-PROVISIONER_DIR="$API_DIR/homelab-vm-provisioner-cli"
+PROVISIONER_CLI_PATH="${PROVISIONER_CLI_PATH:-homelab-vm-provisioner-cli}"
+if [[ "$PROVISIONER_CLI_PATH" != /* ]]; then
+    PROVISIONER_DIR="$ROOT_DIR/$PROVISIONER_CLI_PATH"
+else
+    PROVISIONER_DIR="$PROVISIONER_CLI_PATH"
+fi
 PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$PROVISIONER_DIR/.venv}"
 INSTALL_DEV=false
 
@@ -27,6 +32,7 @@ ENABLE_WORKER="${ENABLE_WORKER:-true}"
 
 # Parse arguments
 USE_DOCKER=false
+SKIP_SYSTEM_PACKAGES=false
 SETUP_ARGS=()
 for arg in "$@"; do
     case "$arg" in
@@ -38,6 +44,7 @@ for arg in "$@"; do
             SETUP_ARGS+=("$arg")
             ;;
         --skip-system-packages)
+            SKIP_SYSTEM_PACKAGES=true
             SETUP_ARGS+=("$arg")
             ;;
         --client-only)
@@ -56,6 +63,32 @@ done
 
 log() {
     printf '==> %s\n' "$*"
+}
+
+ensure_sudo_credentials() {
+    local reason="$1"
+
+    if [[ "${EUID}" -eq 0 ]]; then
+        return
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        printf 'sudo is required for this setup step but is not installed.\n' >&2
+        exit 1
+    fi
+
+    if sudo -n -v >/dev/null 2>&1; then
+        return
+    fi
+
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        printf '%s\n' "$reason" >&2
+        printf 'Run this script from an interactive terminal or pre-authorize sudo with `sudo -v` first.\n' >&2
+        exit 1
+    fi
+
+    log "$reason"
+    sudo -v
 }
 
 require_cmd() {
@@ -100,6 +133,10 @@ fi
 
 # Check for git (required for submodule initialization)
 require_cmd git
+
+if [[ "$SKIP_SYSTEM_PACKAGES" == "false" ]] && [[ "$ENABLE_CLIENT" == "true" || "$ENABLE_API" == "true" || "$ENABLE_DB" == "true" || "$ENABLE_DB_SERVICE" == "true" || "$ENABLE_WORKER" == "true" ]]; then
+    ensure_sudo_credentials "System package installation requires sudo access. Confirm it once now so component setup can continue cleanly."
+fi
 
 # Initialize git submodules based on enabled services
 SUBMODULES_TO_INIT=()

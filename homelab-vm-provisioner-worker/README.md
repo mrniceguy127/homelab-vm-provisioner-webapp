@@ -4,7 +4,7 @@ Long-running daemon for processing VM provisioning jobs from PostgreSQL.
 
 ## Overview
 
-The worker daemon is a standalone Python service that claims and executes queued provisioning jobs. It is designed to run on the same host as the VMs being provisioned and must have access to the `vmctl` command-line tool from the [homelab-vm-provisioner-cli](../homelab-vm-provisioner-api/homelab-vm-provisioner-cli) project.
+The worker daemon is a standalone Python service that claims and executes queued provisioning jobs. It is designed to run on the same host as the VMs being provisioned and must have access to the `vmctl` command-line tool from the [homelab-vm-provisioner-cli](../homelab-vm-provisioner-cli) project.
 
 ## Features
 
@@ -48,7 +48,7 @@ The worker reads configuration from environment variables:
 When running in the monorepo, set `PROVISIONER_CLI_PATH` to point to the local provisioner CLI:
 
 ```bash
-PROVISIONER_CLI_PATH=../homelab-vm-provisioner-api/homelab-vm-provisioner-cli
+PROVISIONER_CLI_PATH=../homelab-vm-provisioner-cli
 ```
 
 This allows the worker to use the monorepo's provisioner without requiring it to be installed system-wide.
@@ -118,7 +118,7 @@ The worker can be deployed independently on any host:
 
 When running as part of the monorepo:
 
-1. Configure `.env` with `PROVISIONER_CLI_PATH=../homelab-vm-provisioner-api/homelab-vm-provisioner-cli`
+1. Configure `.env` with `PROVISIONER_CLI_PATH=../homelab-vm-provisioner-cli`
 2. Use monorepo scripts: `./start --enable-worker` (from workspace root)
 
 ### Systemd Service (Future)

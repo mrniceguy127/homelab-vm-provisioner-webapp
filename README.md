@@ -4,7 +4,7 @@ Top-level workspace for the homelab VM provisioner web application.
 
 This repository wires together:
 
-- `homelab-vm-provisioner-api/`: the Express API and nested Python provisioner integration
+- `homelab-vm-provisioner-api/`: the Express API and provisioner integration
 - `homelab-vm-provisioner-client/`: the React UI
 - `homelab-vm-provisioner-proxy/`: a dead-simple reverse proxy that serves the React client and proxies API requests
 - root scripts that install dependencies, build both apps, run tests, and deploy the client bundle into the proxy's `public/` directory
@@ -156,7 +156,7 @@ If your machine already has the required OS packages, use:
 ./setup --skip-system-packages
 ```
 
-Useful pass-through options supported by the nested provisioner setup:
+Useful pass-through options supported by the provisioner setup:
 
 - `--skip-system-packages`: skip system package installation
 - `--dev`: install Python dev dependencies (ruff, coverage, Sphinx)
@@ -231,12 +231,16 @@ ENABLE_DB=true           # PostgreSQL database
 
 5. **Database service only**: Microservice without PostgreSQL (requires external DB)
    ```bash
-   ENABLE_DB_SERVICE=true
-   ENABLE_DB=false
-   DATABASE_URL=postgresql://user:pass@external-host:5432/dbname
-   
-   # Microservice connects to external PostgreSQL
-   ```
+    ENABLE_DB_SERVICE=true
+    ENABLE_DB=false
+    POSTGRES_HOST=external-host
+    POSTGRES_PORT=5432
+    POSTGRES_USER=user
+    POSTGRES_PASSWORD=pass
+    POSTGRES_DB=dbname
+    
+    # Microservice connects to external PostgreSQL
+    ```
 
 6. **PostgreSQL only**: Database without microservice
    ```bash
@@ -272,7 +276,8 @@ export ENABLE_CLIENT=true ENABLE_API=false
 - `./homelab-vm-provisioner-db/build --docker`: builds the database Docker image
 - `./test`: runs all tests with coverage across Python CLI, Worker, API, and Client (supports `--cli`, `--worker`, `--api`, `--client` flags for selective testing, or `--env` to test only components enabled in `.env`)
 - `./start`: starts enabled services (controlled by ENABLE_* variables in .env)
-- `./start --docker`: starts services with Docker proxy (controlled by ENABLE_* variables)
+- `./start --docker`: starts enabled DB services, API, and proxy in Docker, with the worker running locally
+- `./docker-clean`: stops and removes the workspace Docker containers (`hlvmp-db`, `hlvmp-api`, `hlvmp-proxy`)
 - `./homelab-vm-provisioner-proxy/start`: runs the proxy in a Docker container (requires static files in `public/`)
 - `./homelab-vm-provisioner-db/start --docker`: runs PostgreSQL and/or microservice in Docker container
 
@@ -381,7 +386,7 @@ cp .env.example .env
 cp homelab-vm-provisioner-api/.env.example homelab-vm-provisioner-api/.env
 cp homelab-vm-provisioner-client/.env.example homelab-vm-provisioner-client/.env
 cp homelab-vm-provisioner-proxy/.env.example homelab-vm-provisioner-proxy/.env
-cp homelab-vm-provisioner-api/homelab-vm-provisioner-cli/.env.example homelab-vm-provisioner-api/homelab-vm-provisioner-cli/.env
+cp homelab-vm-provisioner-cli/.env.example homelab-vm-provisioner-cli/.env
 
 # Customize as needed
 ```
@@ -429,10 +434,11 @@ The `--client-only` flag:
 
 | Variable | Default | Used by | Purpose |
 | --- | --- | --- | --- |
-| `PROVISIONER_VENV_DIR` | `homelab-vm-provisioner-api/homelab-vm-provisioner-cli/.venv` | `./setup`, `./start` | Location of the nested Python provisioner virtual environment |
+| `PROVISIONER_VENV_DIR` | `homelab-vm-provisioner-cli/.venv` | `./setup`, `./start` | Location of the provisioner virtual environment |
+| `PROVISIONER_DATA_DIR` | `homelab-vm-provisioner-cli/data` in root `.env`, `data` in CLI `.env` | CLI, API, worker | Provisioner data root; root-level relative values are rewritten relative to the CLI checkout before use |
 | `PORT` | `3000` (proxy), `3001` (API) | Proxy and API | HTTP ports for the services |
 | `API_URL` | `http://localhost:3001` | Proxy | Backend API URL (constructed from PROXY_API_HOST + API_PORT) |
-| `HLVMP_PROVISIONER_DIR` | `homelab-vm-provisioner-api/homelab-vm-provisioner-cli` | API | Override the nested provisioner checkout path |
+| `PROVISIONER_CLI_PATH` | `homelab-vm-provisioner-cli` | `./setup`, `./start`, API, worker | Override the provisioner checkout path |
 | `HLVMP_API_RUNTIME_DIR` | `homelab-vm-provisioner-api/runtime` | API | Legacy runtime directory used for startup migration |
 | `HLVMP_NETWORK_POOL_CIDR` | `10.80.0.0/16` | API | Global private pool used to allocate per-network-group subnets |
 | `HLVMP_NETWORK_GROUP_PREFIX_LENGTH` | `28` | API | Prefix length allocated to each managed network group |
@@ -452,10 +458,10 @@ VITE_API_BASE_URL=http://localhost:3000 npm --prefix homelab-vm-provisioner-clie
 After setup and use, the workspace relies on these paths:
 
 - `homelab-vm-provisioner-proxy/public/`: deployed client bundle served by the reverse proxy
-- `homelab-vm-provisioner-api/homelab-vm-provisioner-cli/configs/`: saved VM YAML configs
-- `homelab-vm-provisioner-api/homelab-vm-provisioner-cli/vm/metadata/`: persisted tenant and network-group records
-- `homelab-vm-provisioner-api/homelab-vm-provisioner-cli/vm/keys/users/`: uploaded SSH public keys
-- `homelab-vm-provisioner-api/homelab-vm-provisioner-cli/vm/data/`: provisioner VM data
+- `homelab-vm-provisioner-cli/data/configs/`: saved VM YAML configs
+- `homelab-vm-provisioner-cli/data/vm/metadata/`: persisted tenant and network-group records
+- `homelab-vm-provisioner-cli/data/vm/keys/users/`: uploaded SSH public keys
+- `homelab-vm-provisioner-cli/data/vm/data/`: provisioner VM data
 
 ## Tenant Networking
 
@@ -485,7 +491,7 @@ After `./setup` completes, build and start the workspace from the root with:
 This command:
 
 - verifies the built client exists in `homelab-vm-provisioner-api/public/`
-- verifies the nested provisioner virtual environment exists
+- verifies the provisioner virtual environment exists
 - exports `HLVMP_PYTHON_BIN` to the provisioner venv's Python interpreter
 - starts the API, which also serves the built client
 

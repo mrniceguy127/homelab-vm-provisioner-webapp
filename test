@@ -3,7 +3,12 @@ set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$ROOT_DIR"  # Save original root before it gets overridden
-PYTHON_DIR="$ROOT_DIR/homelab-vm-provisioner-api/homelab-vm-provisioner-cli"
+PROVISIONER_CLI_PATH="${PROVISIONER_CLI_PATH:-homelab-vm-provisioner-cli}"
+if [[ "$PROVISIONER_CLI_PATH" != /* ]]; then
+    PYTHON_DIR="$ROOT_DIR/$PROVISIONER_CLI_PATH"
+else
+    PYTHON_DIR="$PROVISIONER_CLI_PATH"
+fi
 API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 

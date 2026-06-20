@@ -19,7 +19,7 @@ class TestDatabaseClient(unittest.TestCase):
     def test_health_check_success(self, mock_urlopen):
         """Test successful health check."""
         mock_response = MagicMock()
-        mock_response.read.return_value = json.dumps({"status": "ok"}).encode("utf-8")
+        mock_response.read.return_value = json.dumps({"ok": True}).encode("utf-8")
         mock_urlopen.return_value.__enter__.return_value = mock_response
 
         result = self.client.health_check()
@@ -93,6 +93,9 @@ class TestDatabaseClient(unittest.TestCase):
 
         self.assertEqual(result["id"], 1)
         self.assertEqual(result["status"], "running")
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertTrue(request.full_url.endswith("/jobs/1/running"))
 
     @patch("hlvmp_worker.db_client.urlopen")
     def test_mark_job_succeeded(self, mock_urlopen):
@@ -114,6 +117,9 @@ class TestDatabaseClient(unittest.TestCase):
 
         self.assertEqual(result["id"], 1)
         self.assertEqual(result["status"], "succeeded")
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertTrue(request.full_url.endswith("/jobs/1/succeeded"))
 
     @patch("hlvmp_worker.db_client.urlopen")
     def test_mark_job_failed(self, mock_urlopen):
@@ -135,6 +141,9 @@ class TestDatabaseClient(unittest.TestCase):
 
         self.assertEqual(result["id"], 1)
         self.assertEqual(result["status"], "failed")
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertTrue(request.full_url.endswith("/jobs/1/failed"))
 
     @patch("hlvmp_worker.db_client.urlopen")
     def test_append_job_event(self, mock_urlopen):
@@ -198,6 +207,9 @@ class TestDatabaseClient(unittest.TestCase):
         result = self.client.release_resource_locks(1, "worker1")
 
         self.assertEqual(result, 2)
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertTrue(request.full_url.endswith("/locks/release"))
 
     @patch("hlvmp_worker.db_client.urlopen")
     def test_request_with_http_error(self, mock_urlopen):

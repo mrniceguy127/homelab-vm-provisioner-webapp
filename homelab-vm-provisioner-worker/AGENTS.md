@@ -54,7 +54,7 @@ hlvmp_worker/
 ## Integration Modes
 
 ### Monorepo Mode
-Set `PROVISIONER_CLI_PATH=../homelab-vm-provisioner-api/homelab-vm-provisioner-cli`
+Set `PROVISIONER_CLI_PATH=../homelab-vm-provisioner-cli`
 
 ### Standalone Mode
 Ensure `vmctl` is in PATH or set `PROVISIONER_CLI_PATH`

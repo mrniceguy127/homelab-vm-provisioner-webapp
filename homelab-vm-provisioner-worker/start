@@ -6,6 +6,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SCRIPT_DIR"
 
 # Parse arguments
@@ -27,11 +28,28 @@ if [[ "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-# Load .env if it exists
+# Load workspace .env first, then allow component .env to override it
+if [[ -f "$WORKSPACE_ROOT/.env" ]]; then
+  set -a
+  source "$WORKSPACE_ROOT/.env"
+  set +a
+fi
+
 if [[ -f .env ]]; then
   set -a
   source .env
   set +a
+fi
+
+# Resolve monorepo-relative provisioner path for direct worker runs
+if [[ -n "${PROVISIONER_CLI_PATH:-}" && "${PROVISIONER_CLI_PATH}" != /* ]]; then
+  PROVISIONER_CLI_PATH="$WORKSPACE_ROOT/$PROVISIONER_CLI_PATH"
+  export PROVISIONER_CLI_PATH
+fi
+
+if [[ -n "${PROVISIONER_DATA_DIR:-}" && "${PROVISIONER_DATA_DIR}" != /* ]]; then
+  PROVISIONER_DATA_DIR="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[2], sys.argv[1]))' "$PROVISIONER_CLI_PATH" "$WORKSPACE_ROOT/$PROVISIONER_DATA_DIR")"
+  export PROVISIONER_DATA_DIR
 fi
 
 # Check required environment variables

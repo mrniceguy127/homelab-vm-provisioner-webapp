@@ -4,6 +4,7 @@ hlvmp_worker/__init__.py
 hlvmp_worker/config.py
 hlvmp_worker/db_client.py
 hlvmp_worker/executor.py
+hlvmp_worker/socket_server.py
 hlvmp_worker/worker.py
 homelab_vm_provisioner_worker.egg-info/PKG-INFO
 homelab_vm_provisioner_worker.egg-info/SOURCES.txt
@@ -13,4 +14,5 @@ homelab_vm_provisioner_worker.egg-info/top_level.txt
 tests/test_config.py
 tests/test_db_client.py
 tests/test_executor.py
+tests/test_socket_server.py
 tests/test_worker.py

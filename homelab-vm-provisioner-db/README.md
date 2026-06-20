@@ -51,8 +51,12 @@ sudo -u postgres psql -c "CREATE DATABASE hlvmp;"
 sudo -u postgres psql -c "CREATE USER hlvmp WITH PASSWORD 'hlvmppass';"
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE hlvmp TO hlvmp;"
 
-# Set DATABASE_URL in .env
-echo "DATABASE_URL=postgresql://hlvmp:hlvmppass@localhost:5432/hlvmp" > .env
+# Set database connection values in .env
+echo "POSTGRES_HOST=localhost" > .env
+echo "POSTGRES_PORT=5432" >> .env
+echo "POSTGRES_USER=hlvmp" >> .env
+echo "POSTGRES_PASSWORD=hlvmppass" >> .env
+echo "POSTGRES_DB=hlvmp" >> .env
 echo "DB_SERVICE_PORT=3002" >> .env
 echo "DB_SERVICE_PASSWORD=changeme_db_secret" >> .env
 
@@ -144,13 +148,17 @@ Configure via `.env`:
 
 ```bash
 # PostgreSQL connection
-DATABASE_URL=postgresql://hlvmp:hlvmppass@localhost:5432/hlvmp
-
-# Container settings (for Docker mode only)
+POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_USER=hlvmp
 POSTGRES_PASSWORD=hlvmppass
 POSTGRES_DB=hlvmp
+
+# Legacy fallback
+#DATABASE_URL=postgresql://hlvmp:hlvmppass@localhost:5432/hlvmp
+
+# Container settings (for Docker mode only)
+# Keep POSTGRES_HOST=localhost when the container includes PostgreSQL.
 ```
 
 ## Supported Distributions

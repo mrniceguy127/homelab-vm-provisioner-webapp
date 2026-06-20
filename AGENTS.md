@@ -30,7 +30,8 @@ cd homelab-vm-provisioner-worker && ./setup [--skip-system-packages] [--dev]
 ./test --api           # Run only API tests
 ./test --client        # Run only client tests
 ./start                # Start all services (API, DB, worker, proxy)
-./start --docker       # Start API locally, proxy in Docker
+./start --docker       # Start DB/API/proxy in Docker, worker locally
+./docker-clean         # Stop and remove workspace Docker containers
 ./start --client-only  # Build client and start proxy only (no API, for remote API)
 ./homelab-vm-provisioner-client/build  # Build only client with Docker
 ./homelab-vm-provisioner-proxy/build   # Build proxy Docker image
@@ -146,12 +147,12 @@ cp .env.example .env
 - `WORKER_POLL_INTERVAL`: Poll interval in seconds (default: 5.0)
 
 **Monorepo vs Standalone:**
-- **Monorepo mode**: Worker enabled by default, uses `../homelab-vm-provisioner-api/homelab-vm-provisioner-cli` via `PROVISIONER_CLI_PATH`
+- **Monorepo mode**: Worker enabled by default, uses `../homelab-vm-provisioner-cli` via `PROVISIONER_CLI_PATH`
 - **Standalone mode**: Worker finds `vmctl` in PATH or uses configured `PROVISIONER_CLI_PATH`
 - **Disable Worker**: Set `ENABLE_WORKER=false` in workspace `.env` to disable
 
 See [homelab-vm-provisioner-worker/README.md](homelab-vm-provisioner-worker/README
-See [WORKER.md](homelab-vm-provisioner-api/homelab-vm-provisioner-cli/WORKER.md) for full documentation.
+See [WORKER.md](homelab-vm-provisioner-cli/WORKER.md) for full documentation.
 
 ## Code Style Essentials
 

@@ -50,6 +50,43 @@ log() {
     printf '==> %s\n' "$*"
 }
 
+hash_string() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | cut -d' ' -f1
+        return
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 | cut -d' ' -f1
+        return
+    fi
+
+    printf 'Missing command: sha256sum or shasum\n' >&2
+    exit 1
+}
+
+docker_container_exists() {
+    docker inspect "$1" >/dev/null 2>&1
+}
+
+docker_container_running() {
+    [[ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" == "true" ]]
+}
+
+docker_container_image_id() {
+    docker inspect -f '{{.Image}}' "$1" 2>/dev/null || true
+}
+
+docker_container_label() {
+    local container_name="$1"
+    local label_name="$2"
+    docker inspect -f "{{index .Config.Labels \"$label_name\"}}" "$container_name" 2>/dev/null || true
+}
+
+docker_image_id() {
+    docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || true
+}
+
 # Check if static files exist
 if [[ ! -f "$PROXY_PUBLIC_DIR/index.html" ]]; then
     log "Error: Static files not found in $PROXY_PUBLIC_DIR"
@@ -64,17 +101,62 @@ if [[ "$DOCKER_MODE" == "true" ]]; then
         "$PROXY_DIR/build" --docker
     fi
 
-    log "Starting proxy container"
+    DESIRED_IMAGE_ID="$(docker_image_id homelab-vm-provisioner-proxy:latest)"
+    DESIRED_CONFIG_HASH="$({
+        printf 'PROXY_PORT=%s\n' "$PROXY_PORT"
+        printf 'API_URL=%s\n' "$API_URL"
+        printf 'PUBLIC_DIR=%s\n' "$PROXY_PUBLIC_DIR"
+    } | hash_string)"
+    PROXY_CONTAINER_STARTED=false
+
+    if docker_container_exists hlvmp-proxy; then
+        CURRENT_IMAGE_ID="$(docker_container_image_id hlvmp-proxy)"
+        CURRENT_CONFIG_HASH="$(docker_container_label hlvmp-proxy hlvmp.config-hash)"
+
+        if [[ "$CURRENT_IMAGE_ID" == "$DESIRED_IMAGE_ID" && "$CURRENT_CONFIG_HASH" == "$DESIRED_CONFIG_HASH" ]]; then
+            if docker_container_running hlvmp-proxy; then
+                log "Proxy container is already running and up to date"
+            else
+                log "Starting existing up-to-date proxy container"
+                docker start hlvmp-proxy >/dev/null
+                PROXY_CONTAINER_STARTED=true
+            fi
+        else
+            log "Existing proxy container is out of date; recreating it"
+            docker rm -f hlvmp-proxy >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if ! docker_container_exists hlvmp-proxy; then
+        log "Starting proxy container"
+        log "  Port: $PROXY_PORT"
+        log "  API URL: $API_URL"
+        log "  Static files: $PROXY_PUBLIC_DIR"
+
+        docker run -d \
+            --name hlvmp-proxy \
+            --label hlvmp.project=homelab-vm-provisioner \
+            --label "hlvmp.config-hash=$DESIRED_CONFIG_HASH" \
+            -p "$PROXY_PORT:3000" \
+            -e "API_URL=$API_URL" \
+            -v "$PROXY_PUBLIC_DIR:/app/public:ro" \
+            homelab-vm-provisioner-proxy:latest >/dev/null
+        PROXY_CONTAINER_STARTED=true
+    fi
+
+    cleanup() {
+        if [[ "$PROXY_CONTAINER_STARTED" == "true" ]]; then
+            docker rm -f hlvmp-proxy >/dev/null 2>&1 || true
+        fi
+    }
+    trap cleanup EXIT INT TERM
+
+    log "Proxy container ready"
     log "  Port: $PROXY_PORT"
     log "  API URL: $API_URL"
     log "  Static files: $PROXY_PUBLIC_DIR"
 
-    docker run --rm \
-        --name hlvmp-proxy \
-        -p "$PROXY_PORT:3000" \
-        -e "API_URL=$API_URL" \
-        -v "$PROXY_PUBLIC_DIR:/app/public:ro" \
-        homelab-vm-provisioner-proxy:latest
+    docker logs -f --tail 20 hlvmp-proxy
 else
     log "Starting proxy locally"
     log "  Port: $PROXY_PORT"

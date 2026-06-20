@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONTAINERS=(
+    "hlvmp-db"
+    "hlvmp-api"
+    "hlvmp-proxy"
+)
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+if [[ "${1:-}" == "--help" ]]; then
+    echo "Usage: $0 [--help]"
+    echo ""
+    echo "Stop and remove the Docker containers used by this workspace."
+    echo ""
+    echo "Containers removed:"
+    echo "  - hlvmp-db"
+    echo "  - hlvmp-api"
+    echo "  - hlvmp-proxy"
+    exit 0
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+    log "Error: Docker not found. Install Docker Engine."
+    exit 1
+fi
+
+removed_any=false
+
+for container in "${CONTAINERS[@]}"; do
+    if docker ps -a --filter "name=^/${container}$" --format '{{.Names}}' | grep -q "^${container}$"; then
+        if docker ps --filter "name=^/${container}$" --format '{{.Names}}' | grep -q "^${container}$"; then
+            log "Stopping ${container}"
+            docker stop "$container" >/dev/null
+        fi
+
+        log "Removing ${container}"
+        docker rm -f "$container" >/dev/null
+        removed_any=true
+    else
+        log "${container} not present"
+    fi
+done
+
+if [[ "$removed_any" == "false" ]]; then
+    log "No project Docker containers found"
+else
+    log "Project Docker containers removed"
+fi

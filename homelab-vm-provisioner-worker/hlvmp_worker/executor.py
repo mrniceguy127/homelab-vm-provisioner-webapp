@@ -82,6 +82,8 @@ class JobExecutor:
 
             return result
 
+        except JobExecutionError:
+            raise
         except FileNotFoundError as e:
             raise JobExecutionError(
                 f"vmctl not found: {e}",

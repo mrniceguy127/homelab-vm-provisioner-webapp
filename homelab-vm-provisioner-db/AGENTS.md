@@ -133,7 +133,11 @@ Run: `npm run migrate`
 
 ```bash
 # Required
-DATABASE_URL=postgresql://user:pass@host:port/dbname
+POSTGRES_HOST=host
+POSTGRES_PORT=5432
+POSTGRES_USER=user
+POSTGRES_PASSWORD=pass
+POSTGRES_DB=dbname
 DB_SERVICE_PASSWORD=changeme_db_secret  # Auth token for microservice endpoints
 
 # Optional
@@ -164,10 +168,14 @@ sudo -u postgres psql -c "CREATE USER hlvmp WITH PASSWORD 'hlvmppass';"
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE hlvmp TO hlvmp;"
 ```
 
-Set DATABASE_URL in `.env`:
+Set PostgreSQL connection values in `.env`:
 
 ```bash
-DATABASE_URL=postgresql://hlvmp:hlvmppass@localhost:5432/hlvmp
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=hlvmp
+POSTGRES_PASSWORD=hlvmppass
+POSTGRES_DB=hlvmp
 ```
 
 ## Docker Mode

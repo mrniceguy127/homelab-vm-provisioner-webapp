@@ -5,16 +5,41 @@ set -e
 ENABLE_DB="${ENABLE_DB:-true}"
 ENABLE_DB_SERVICE="${ENABLE_DB_SERVICE:-true}"
 
-# PostgreSQL connection details (internal to container)
-export PGHOST=localhost
-export PGPORT=5432
-export PGUSER="${POSTGRES_USER:-hlvmp}"
-export PGPASSWORD="${POSTGRES_PASSWORD:-hlvmppass}"
-export PGDATABASE="${POSTGRES_DB:-hlvmp}"
+# PostgreSQL connection details
+HAS_MODULAR_DB_ENV=false
+if [[ -n "${POSTGRES_HOST+x}" || -n "${POSTGRES_PORT+x}" || -n "${POSTGRES_USER+x}" || -n "${POSTGRES_PASSWORD+x}" || -n "${POSTGRES_DB+x}" ]]; then
+    HAS_MODULAR_DB_ENV=true
+fi
+
+DB_HOST="${POSTGRES_HOST:-localhost}"
+DB_PORT="${POSTGRES_PORT:-5432}"
+DB_USER="${POSTGRES_USER:-hlvmp}"
+DB_PASSWORD="${POSTGRES_PASSWORD:-hlvmppass}"
+DB_NAME="${POSTGRES_DB:-hlvmp}"
+
+if [[ "$ENABLE_DB" == "true" ]]; then
+    export POSTGRES_HOST=localhost
+    export POSTGRES_PORT=5432
+    export POSTGRES_USER="$DB_USER"
+    export POSTGRES_PASSWORD="$DB_PASSWORD"
+    export POSTGRES_DB="$DB_NAME"
+elif [[ "$HAS_MODULAR_DB_ENV" == "true" ]]; then
+    export POSTGRES_HOST="$DB_HOST"
+    export POSTGRES_PORT="$DB_PORT"
+    export POSTGRES_USER="$DB_USER"
+    export POSTGRES_PASSWORD="$DB_PASSWORD"
+    export POSTGRES_DB="$DB_NAME"
+else
+    unset POSTGRES_HOST POSTGRES_PORT POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB
+fi
+
+export PGHOST="${POSTGRES_HOST:-localhost}"
+export PGPORT="${POSTGRES_PORT:-5432}"
+export PGUSER="${POSTGRES_USER:-$DB_USER}"
+export PGPASSWORD="${POSTGRES_PASSWORD:-$DB_PASSWORD}"
+export PGDATABASE="${POSTGRES_DB:-$DB_NAME}"
 export PGDATA="${PGDATA:-/var/lib/postgresql/data}"
 
-# Microservice uses localhost PostgreSQL
-export DATABASE_URL="postgresql://${PGUSER}:${PGPASSWORD}@localhost:${PGPORT}/${PGDATABASE}"
 export DB_SERVICE_PORT="${DB_SERVICE_PORT:-3002}"
 export DB_SERVICE_PASSWORD="${DB_SERVICE_PASSWORD:-changeme_db_secret}"
 
