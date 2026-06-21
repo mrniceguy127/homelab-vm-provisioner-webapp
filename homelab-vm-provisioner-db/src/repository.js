@@ -395,6 +395,260 @@ export class JobRepository {
     
     return result.rows.length;
   }
+
+  async listUsers() {
+    const result = await this.pool.query('SELECT * FROM users ORDER BY created_at, id');
+    return result.rows.map((row) => this._deserializeUser(row));
+  }
+
+  async upsertUser(user) {
+    const result = await this.pool.query(
+      `INSERT INTO users (id, username, role, created_at)
+       VALUES ($1, $2, $3, COALESCE($4, NOW()))
+       ON CONFLICT (id) DO UPDATE
+       SET username = EXCLUDED.username,
+           role = EXCLUDED.role,
+           updated_at = NOW()
+       RETURNING *`,
+      [user.id, user.username, user.role, user.created_at || null]
+    );
+
+    return this._deserializeUser(result.rows[0]);
+  }
+
+  async listNetworkGroups() {
+    const result = await this.pool.query(
+      'SELECT * FROM network_groups ORDER BY created_at, id'
+    );
+    return result.rows.map((row) => this._deserializeNetworkGroup(row));
+  }
+
+  async upsertNetworkGroup(group) {
+    const result = await this.pool.query(
+      `INSERT INTO network_groups (
+         id, owner_user_id, name, libvirt_network_name, bridge_name,
+         subnet_cidr, gateway_ip, dhcp_start, dhcp_end, profile, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()))
+       ON CONFLICT (id) DO UPDATE
+       SET owner_user_id = EXCLUDED.owner_user_id,
+           name = EXCLUDED.name,
+           libvirt_network_name = EXCLUDED.libvirt_network_name,
+           bridge_name = EXCLUDED.bridge_name,
+           subnet_cidr = EXCLUDED.subnet_cidr,
+           gateway_ip = EXCLUDED.gateway_ip,
+           dhcp_start = EXCLUDED.dhcp_start,
+           dhcp_end = EXCLUDED.dhcp_end,
+           profile = EXCLUDED.profile,
+           updated_at = NOW()
+       RETURNING *`,
+      [
+        group.id,
+        group.owner_user_id,
+        group.name,
+        group.libvirt_network_name || null,
+        group.bridge_name || null,
+        group.subnet_cidr || null,
+        group.gateway_ip || null,
+        group.dhcp_start || null,
+        group.dhcp_end || null,
+        group.profile,
+        group.created_at || null,
+      ]
+    );
+
+    return this._deserializeNetworkGroup(result.rows[0]);
+  }
+
+  async upsertVmDefinition(vmDefinition) {
+    const result = await this.pool.query(
+      `INSERT INTO vm_definitions (
+         vm_name, owner_user_id, network_group_id, target_host_id, config,
+         ssh_public_key, setup_script
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (vm_name) DO UPDATE
+       SET owner_user_id = EXCLUDED.owner_user_id,
+           network_group_id = EXCLUDED.network_group_id,
+           target_host_id = EXCLUDED.target_host_id,
+           config = EXCLUDED.config,
+           ssh_public_key = EXCLUDED.ssh_public_key,
+           setup_script = EXCLUDED.setup_script,
+           updated_at = NOW()
+       RETURNING *`,
+      [
+        vmDefinition.vm_name,
+        vmDefinition.owner_user_id || null,
+        vmDefinition.network_group_id || null,
+        vmDefinition.target_host_id,
+        JSON.stringify(vmDefinition.config),
+        vmDefinition.ssh_public_key || null,
+        vmDefinition.setup_script || null,
+      ]
+    );
+
+    return this._deserializeVmDefinition(result.rows[0]);
+  }
+
+  async getVmDefinitionByName(vmName) {
+    const result = await this.pool.query(
+      'SELECT * FROM vm_definitions WHERE vm_name = $1',
+      [vmName]
+    );
+    return result.rows[0] ? this._deserializeVmDefinition(result.rows[0]) : null;
+  }
+
+  async getVmDefinitionById(vmDefinitionId) {
+    const result = await this.pool.query(
+      'SELECT * FROM vm_definitions WHERE id = $1',
+      [vmDefinitionId]
+    );
+    return result.rows[0] ? this._deserializeVmDefinition(result.rows[0]) : null;
+  }
+
+  async listVmDefinitions() {
+    const result = await this.pool.query('SELECT * FROM vm_definitions ORDER BY vm_name');
+    return result.rows.map((row) => this._deserializeVmDefinition(row));
+  }
+
+  async deleteVmDefinition(vmName) {
+    const result = await this.pool.query(
+      'DELETE FROM vm_definitions WHERE vm_name = $1 RETURNING *',
+      [vmName]
+    );
+    return result.rows[0] ? this._deserializeVmDefinition(result.rows[0]) : null;
+  }
+
+  async upsertVmRuntimeState(vmName, state) {
+    const result = await this.pool.query(
+      `INSERT INTO vm_runtime_state (vm_name, state)
+       VALUES ($1, $2)
+       ON CONFLICT (vm_name) DO UPDATE
+       SET state = EXCLUDED.state,
+           updated_at = NOW()
+       RETURNING *`,
+      [vmName, JSON.stringify(state || {})]
+    );
+
+    return this._deserializeVmRuntimeState(result.rows[0]);
+  }
+
+  async getVmRuntimeState(vmName) {
+    const result = await this.pool.query(
+      'SELECT * FROM vm_runtime_state WHERE vm_name = $1',
+      [vmName]
+    );
+    return result.rows[0] ? this._deserializeVmRuntimeState(result.rows[0]) : null;
+  }
+
+  async listVmRuntimeStates() {
+    const result = await this.pool.query('SELECT * FROM vm_runtime_state ORDER BY vm_name');
+    return result.rows.map((row) => this._deserializeVmRuntimeState(row));
+  }
+
+  async deleteVmRuntimeState(vmName) {
+    const result = await this.pool.query(
+      'DELETE FROM vm_runtime_state WHERE vm_name = $1 RETURNING *',
+      [vmName]
+    );
+    return result.rows[0] ? this._deserializeVmRuntimeState(result.rows[0]) : null;
+  }
+
+  async upsertVmSnapshot(vmName, snapshotId, metadata) {
+    const result = await this.pool.query(
+      `INSERT INTO vm_snapshots (vm_name, snapshot_id, metadata)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (vm_name, snapshot_id) DO UPDATE
+       SET metadata = EXCLUDED.metadata,
+           updated_at = NOW()
+       RETURNING *`,
+      [vmName, snapshotId, JSON.stringify(metadata || {})]
+    );
+
+    return this._deserializeVmSnapshot(result.rows[0]);
+  }
+
+  async getVmSnapshot(vmName, snapshotId) {
+    const result = await this.pool.query(
+      'SELECT * FROM vm_snapshots WHERE vm_name = $1 AND snapshot_id = $2',
+      [vmName, snapshotId]
+    );
+    return result.rows[0] ? this._deserializeVmSnapshot(result.rows[0]) : null;
+  }
+
+  async upsertVmDefinitionAndEnqueueJob(vmDefinition, jobType, jobPayload, jobOptions = {}) {
+    const {
+      targetVmId = null,
+      maxAttempts = 3,
+      targetHostId = vmDefinition.target_host_id,
+    } = jobOptions;
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const vmDefinitionResult = await client.query(
+        `INSERT INTO vm_definitions (
+           vm_name, owner_user_id, network_group_id, target_host_id, config,
+           ssh_public_key, setup_script
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (vm_name) DO UPDATE
+         SET owner_user_id = EXCLUDED.owner_user_id,
+             network_group_id = EXCLUDED.network_group_id,
+             target_host_id = EXCLUDED.target_host_id,
+             config = EXCLUDED.config,
+             ssh_public_key = EXCLUDED.ssh_public_key,
+             setup_script = EXCLUDED.setup_script,
+             updated_at = NOW()
+         RETURNING *`,
+        [
+          vmDefinition.vm_name,
+          vmDefinition.owner_user_id || null,
+          vmDefinition.network_group_id || null,
+          vmDefinition.target_host_id,
+          JSON.stringify(vmDefinition.config),
+          vmDefinition.ssh_public_key || null,
+          vmDefinition.setup_script || null,
+        ]
+      );
+
+      const jobResult = await client.query(
+        `INSERT INTO jobs (type, target_host_id, target_vm_id, payload, max_attempts)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [jobType, targetHostId, targetVmId, JSON.stringify(jobPayload), maxAttempts]
+      );
+
+      await client.query('COMMIT');
+
+      return {
+        vmDefinition: this._deserializeVmDefinition(vmDefinitionResult.rows[0]),
+        job: this._deserializeJob(jobResult.rows[0]),
+      };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listVmSnapshots(vmName) {
+    const result = await this.pool.query(
+      'SELECT * FROM vm_snapshots WHERE vm_name = $1 ORDER BY created_at DESC',
+      [vmName]
+    );
+    return result.rows.map((row) => this._deserializeVmSnapshot(row));
+  }
+
+  async deleteVmSnapshot(vmName, snapshotId) {
+    const result = await this.pool.query(
+      'DELETE FROM vm_snapshots WHERE vm_name = $1 AND snapshot_id = $2 RETURNING *',
+      [vmName, snapshotId]
+    );
+    return result.rows[0] ? this._deserializeVmSnapshot(result.rows[0]) : null;
+  }
   
   /**
    * Deserialize job row from database
@@ -435,6 +689,67 @@ export class JobRepository {
       message: row.message,
       metadata: row.metadata,
       createdAt: row.created_at
+    };
+  }
+
+  _deserializeUser(row) {
+    return {
+      id: row.id,
+      username: row.username,
+      role: row.role,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  _deserializeNetworkGroup(row) {
+    return {
+      id: row.id,
+      owner_user_id: row.owner_user_id,
+      name: row.name,
+      libvirt_network_name: row.libvirt_network_name,
+      bridge_name: row.bridge_name,
+      subnet_cidr: row.subnet_cidr,
+      gateway_ip: row.gateway_ip,
+      dhcp_start: row.dhcp_start,
+      dhcp_end: row.dhcp_end,
+      profile: row.profile,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  _deserializeVmDefinition(row) {
+    return {
+      id: row.id,
+      vm_name: row.vm_name,
+      owner_user_id: row.owner_user_id,
+      network_group_id: row.network_group_id,
+      target_host_id: row.target_host_id,
+      config: row.config,
+      ssh_public_key: row.ssh_public_key,
+      setup_script: row.setup_script,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  _deserializeVmRuntimeState(row) {
+    return {
+      vm_name: row.vm_name,
+      state: row.state,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  _deserializeVmSnapshot(row) {
+    return {
+      vm_name: row.vm_name,
+      snapshot_id: row.snapshot_id,
+      metadata: row.metadata,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
     };
   }
 }

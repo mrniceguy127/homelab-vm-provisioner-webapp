@@ -1,11 +1,15 @@
 """Job executor for provisioner operations.
 
-Maps job types to provisioner CLI commands and handles execution via subprocess.
+Maps job types to provisioner Python service functions and executes them
+in-process on the host.
 """
 
-import subprocess
+from importlib import import_module
 from pathlib import Path
+import sys
 from typing import Any, Callable
+
+from .db_client import DatabaseClient
 
 
 class JobExecutionError(Exception):
@@ -23,19 +27,17 @@ class JobExecutionError(Exception):
 
 
 class JobExecutor:
-    """Executes provisioner jobs by calling vmctl subprocess."""
+    """Executes provisioner jobs by calling provisioner Python services."""
 
-    def __init__(self, provisioner_cli_path: str):
+    def __init__(self, provisioner_cli_path: str, db_client: DatabaseClient):
         """Initialize job executor.
 
         Args:
             provisioner_cli_path: Path to provisioner CLI directory
         """
         self.provisioner_cli_path = Path(provisioner_cli_path)
-        self.vmctl_path = self.provisioner_cli_path / "vmctl"
-
-        if not self.vmctl_path.exists():
-            raise ValueError(f"vmctl not found at {self.vmctl_path}")
+        self.db_client = db_client
+        self.service_mode = self._load_service_mode_module()
 
         self._handlers: dict[str, Callable] = {
             "provision_vm": self._execute_provision_vm,
@@ -49,51 +51,94 @@ class JobExecutor:
             "snapshot_delete": self._execute_snapshot_delete,
         }
 
-    def _run_vmctl(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-        """Run vmctl command.
-
-        Args:
-            *args: Command arguments
-            check: Raise exception on non-zero exit
-
-        Returns:
-            CompletedProcess instance
-
-        Raises:
-            JobExecutionError: If command fails and check=True
-        """
-        cmd = [str(self.vmctl_path), *list(args)]
+    def _load_service_mode_module(self):
+        if not self.provisioner_cli_path.exists():
+            raise ValueError(f"Provisioner CLI path does not exist: {self.provisioner_cli_path}")
 
         try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(self.provisioner_cli_path),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-            if check and result.returncode != 0:
-                error_msg = result.stderr.strip() or result.stdout.strip() or f"Command failed with exit code {result.returncode}"
-                raise JobExecutionError(
-                    f"vmctl command failed: {error_msg}",
-                    retriable=True
-                )
-
-            return result
-
-        except JobExecutionError:
-            raise
-        except FileNotFoundError as e:
+            module_root = str(self.provisioner_cli_path.resolve())
+            if module_root not in sys.path:
+                sys.path.insert(0, module_root)
+            return import_module("homelab_vm_provisioner.service_mode")
+        except ModuleNotFoundError as e:
             raise JobExecutionError(
-                f"vmctl not found: {e}",
+                f"Could not import provisioner service module: {e}",
                 retriable=False
             ) from e
         except Exception as e:
             raise JobExecutionError(
-                f"Failed to execute vmctl: {e}",
+                f"Failed to initialize provisioner service module: {e}",
                 retriable=True
             ) from e
+
+    def _load_vm_definition(self, vm_name: str) -> dict[str, Any]:
+        vm_definition = self.db_client.get_vm_definition_by_name(vm_name)
+        if not vm_definition:
+            raise JobExecutionError(
+                f"VM definition not found: {vm_name}", retriable=False
+            )
+
+        return vm_definition
+
+    def _build_service_config(self, vm_definition: dict[str, Any]) -> dict[str, Any]:
+        config_data = dict(vm_definition.get("config") or {})
+        vm_config = dict(config_data.get("vm") or {})
+        scripts_config = dict(config_data.get("scripts") or {})
+
+        if vm_definition.get("ssh_public_key"):
+            vm_config["ssh_public_key"] = vm_definition["ssh_public_key"].rstrip("\n")
+        if vm_definition.get("setup_script"):
+            scripts_config["setup_script_content"] = vm_definition["setup_script"]
+
+        config_data["vm"] = vm_config
+        if scripts_config:
+            config_data["scripts"] = scripts_config
+
+        return config_data
+
+    def _build_reconcile_payload(self, policy_only: bool) -> dict[str, Any]:
+        vm_definitions = self.db_client.list_vm_definitions()
+        runtime_states = {
+            row["vm_name"]: row["state"]
+            for row in self.db_client.list_vm_runtime_states()
+        }
+        network_groups = self.db_client.list_network_groups()
+        vm_records = []
+        for vm_definition in vm_definitions:
+            config_data = vm_definition.get("config") or {}
+            vm_config = config_data.get("vm") or {}
+            network = config_data.get("network") or {}
+            runtime_state = runtime_states.get(vm_definition["vm_name"], {}) or {}
+            effective_network = runtime_state.get("network") or network
+            vm_records.append(
+                {
+                    "vm_name": vm_definition["vm_name"],
+                    "owner_user_id": vm_config.get("owner_user_id"),
+                    "network_group_id": vm_config.get("network_group_id") or effective_network.get("network_group_id"),
+                    "network_group_name": effective_network.get("group_name") or vm_definition["vm_name"],
+                    "profile": effective_network.get("profile") or effective_network.get("mode"),
+                    "libvirt_network_name": effective_network.get("libvirt_network_name") or effective_network.get("name"),
+                    "bridge_name": effective_network.get("bridge_name"),
+                    "subnet_cidr": effective_network.get("subnet_cidr") or effective_network.get("cidr"),
+                    "gateway_ip": effective_network.get("gateway_ip") or effective_network.get("gateway"),
+                    "dhcp_start": effective_network.get("dhcp_start"),
+                    "dhcp_end": effective_network.get("dhcp_end"),
+                    "mac_address": runtime_state.get("mac_address") or vm_config.get("mac_address") or effective_network.get("mac"),
+                    "ip_address": runtime_state.get("ip_address") or vm_config.get("ip_address") or effective_network.get("vm_ip"),
+                    "allow_same_group_traffic": vm_config.get("allow_same_group_traffic", True),
+                    "allow_host_access": vm_config.get("allow_host_access", True),
+                    "allow_private_lan_access": bool(vm_config.get("allow_private_lan_access", False)),
+                    "internet_access": vm_config.get("internet_access", True),
+                    "ports": runtime_state.get("ports") or config_data.get("ports") or [],
+                    "state_exists": True,
+                }
+            )
+
+        return {
+            "policy_only": policy_only,
+            "network_groups": network_groups,
+            "vm_records": vm_records,
+        }
 
     def get_supported_job_types(self) -> list[str]:
         """Get list of supported job types.
@@ -181,7 +226,7 @@ class JobExecutor:
         """Execute VM provision job.
 
         Args:
-            payload: Job payload with configPath
+            payload: Job payload with vmName
 
         Returns:
             Job result data
@@ -189,22 +234,24 @@ class JobExecutor:
         Raises:
             JobExecutionError: If provision fails
         """
-        config_path = payload.get("configPath")
-        if not config_path:
+        vm_name = payload.get("vmName")
+        if not vm_name:
             raise JobExecutionError(
-                "Missing required field: configPath", retriable=False
+                "Missing required field: vmName", retriable=False
             )
 
-        config_path_obj = Path(config_path)
-        if not config_path_obj.exists():
-            raise JobExecutionError(
-                f"Config file not found: {config_path}", retriable=False
-            )
-
-        self._run_vmctl("create", config_path)
+        vm_definition = self._load_vm_definition(vm_name)
+        reconcile_payload = self._build_reconcile_payload(False)
+        created = self.service_mode.create_vm(
+            self._build_service_config(vm_definition),
+            reconcile_payload=reconcile_payload,
+        )
+        runtime_state = self.service_mode.refresh_vm_runtime_state(vm_name)
         return {
             "success": True,
-            "configPath": config_path,
+            "vmName": vm_name,
+            "vmDefinitionId": vm_definition["id"],
+            "runtimeState": runtime_state,
             "message": "VM provisioned successfully",
         }
 
@@ -226,10 +273,11 @@ class JobExecutor:
                 "Missing required field: vmName", retriable=False
             )
 
-        self._run_vmctl("destroy", vm_name)
+        self.service_mode.destroy_vm(vm_name)
         return {
             "success": True,
             "vmName": vm_name,
+            "deleteRuntimeState": True,
             "message": "VM destroyed successfully",
         }
 
@@ -237,7 +285,7 @@ class JobExecutor:
         """Execute VM clone job.
 
         Args:
-            payload: Job payload with sourceVmName and configPath
+            payload: Job payload with sourceVmName and targetVmName
 
         Returns:
             Job result data
@@ -246,28 +294,31 @@ class JobExecutor:
             JobExecutionError: If clone fails
         """
         source_vm_name = payload.get("sourceVmName")
-        config_path = payload.get("configPath")
+        target_vm_name = payload.get("targetVmName")
 
         if not source_vm_name:
             raise JobExecutionError(
                 "Missing required field: sourceVmName", retriable=False
             )
-        if not config_path:
+        if not target_vm_name:
             raise JobExecutionError(
-                "Missing required field: configPath", retriable=False
+                "Missing required field: targetVmName", retriable=False
             )
 
-        config_path_obj = Path(config_path)
-        if not config_path_obj.exists():
-            raise JobExecutionError(
-                f"Config file not found: {config_path}", retriable=False
-            )
-
-        self._run_vmctl("clone", source_vm_name, config_path)
+        vm_definition = self._load_vm_definition(target_vm_name)
+        reconcile_payload = self._build_reconcile_payload(False)
+        created = self.service_mode.clone_vm(
+            source_vm_name,
+            self._build_service_config(vm_definition),
+            reconcile_payload=reconcile_payload,
+        )
+        runtime_state = self.service_mode.refresh_vm_runtime_state(target_vm_name)
         return {
             "success": True,
             "sourceVmName": source_vm_name,
-            "configPath": config_path,
+            "targetVmName": target_vm_name,
+            "vmDefinitionId": vm_definition["id"],
+            "runtimeState": runtime_state,
             "message": "VM cloned successfully",
         }
 
@@ -289,10 +340,12 @@ class JobExecutor:
                 "Missing required field: vmName", retriable=False
             )
 
-        self._run_vmctl("start", vm_name)
+        self.service_mode.start_vm(vm_name)
+        runtime_state = self.service_mode.refresh_vm_runtime_state(vm_name)
         return {
             "success": True,
             "vmName": vm_name,
+            "runtimeState": runtime_state,
             "message": "VM started successfully",
         }
 
@@ -314,10 +367,12 @@ class JobExecutor:
                 "Missing required field: vmName", retriable=False
             )
 
-        self._run_vmctl("stop", vm_name)
+        self.service_mode.stop_vm(vm_name)
+        runtime_state = self.service_mode.refresh_vm_runtime_state(vm_name)
         return {
             "success": True,
             "vmName": vm_name,
+            "runtimeState": runtime_state,
             "message": "VM stopped successfully",
         }
 
@@ -335,11 +390,13 @@ class JobExecutor:
         """
         policy_only = payload.get("policyOnly", False)
 
-        args = ["reconcile"]
-        if policy_only:
-            args.append("--policy-only")
+        reconcile_payload = self._build_reconcile_payload(policy_only)
 
-        self._run_vmctl(*args)
+        self.service_mode.reconcile_vm_records(
+            reconcile_payload["vm_records"],
+            network_groups=reconcile_payload.get("network_groups"),
+            policy_only=policy_only,
+        )
         return {
             "success": True,
             "policyOnly": policy_only,
@@ -364,10 +421,20 @@ class JobExecutor:
                 "Missing required field: vmName", retriable=False
             )
 
-        self._run_vmctl("snapshot-create", vm_name)
+        vm_definition = self._load_vm_definition(vm_name)
+        runtime_state = self.db_client.get_vm_runtime_state(vm_name)
+        snapshot_record = self.service_mode.create_snapshot_record(
+            vm_name,
+            {
+                "config_snapshot": self._build_service_config(vm_definition),
+                "runtime_state_snapshot": (runtime_state or {}).get("state", {}),
+            },
+        )
         return {
             "success": True,
             "vmName": vm_name,
+            "snapshotId": snapshot_record.get("snapshot_id"),
+            "snapshotRecord": snapshot_record,
             "message": "Snapshot created successfully",
         }
 
@@ -395,11 +462,26 @@ class JobExecutor:
                 "Missing required field: snapshotId", retriable=False
             )
 
-        self._run_vmctl("snapshot-restore", vm_name, snapshot_id)
+        snapshot_record = self.db_client.get_vm_snapshot(vm_name, snapshot_id)
+        if not snapshot_record:
+            raise JobExecutionError(
+                f"Snapshot not found: {vm_name}/{snapshot_id}", retriable=False
+            )
+
+        reconcile_payload = self._build_reconcile_payload(False)
+        restore_result = self.service_mode.restore_snapshot_record(
+            vm_name,
+            snapshot_id,
+            snapshot_record.get("metadata") or snapshot_record,
+            vm_records=reconcile_payload.get("vm_records"),
+            network_groups=reconcile_payload.get("network_groups"),
+        )
+        runtime_state = self.service_mode.refresh_vm_runtime_state(vm_name)
         return {
             "success": True,
             "vmName": vm_name,
             "snapshotId": snapshot_id,
+            "runtimeState": runtime_state,
             "message": "Snapshot restored successfully",
         }
 
@@ -427,10 +509,21 @@ class JobExecutor:
                 "Missing required field: snapshotId", retriable=False
             )
 
-        self._run_vmctl("snapshot-delete", vm_name, snapshot_id)
+        snapshot_record = self.db_client.get_vm_snapshot(vm_name, snapshot_id)
+        if not snapshot_record:
+            raise JobExecutionError(
+                f"Snapshot not found: {vm_name}/{snapshot_id}", retriable=False
+            )
+
+        self.service_mode.delete_snapshot_record(
+            vm_name,
+            snapshot_id,
+            snapshot_record.get("metadata") or snapshot_record,
+        )
         return {
             "success": True,
             "vmName": vm_name,
             "snapshotId": snapshot_id,
+            "deleteSnapshotRecord": True,
             "message": "Snapshot deleted successfully",
         }

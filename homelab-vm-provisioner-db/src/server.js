@@ -1,4 +1,5 @@
 import express from 'express';
+import { fileURLToPath } from 'node:url';
 import { createRepository } from './repository.js';
 
 const PORT = Number.parseInt(process.env.DB_SERVICE_PORT || '3002', 10);
@@ -32,7 +33,7 @@ if (!DB_SERVICE_PASSWORD) {
   process.exit(1);
 }
 
-const app = express();
+export const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 // Authentication middleware
@@ -53,7 +54,7 @@ function authenticate(req, res, next) {
     ? authHeader.slice(7)
     : authHeader;
   
-  if (token !== DB_SERVICE_PASSWORD) {
+  if (token !== authToken) {
     return res.status(401).json({ error: 'Invalid authorization token' });
   }
   
@@ -63,9 +64,19 @@ function authenticate(req, res, next) {
 app.use(authenticate);
 
 let repository = null;
+let authToken = DB_SERVICE_PASSWORD;
+
+export function setServerContext({ repository: nextRepository, authToken: nextAuthToken } = {}) {
+  if (nextRepository !== undefined) {
+    repository = nextRepository;
+  }
+  if (nextAuthToken !== undefined) {
+    authToken = nextAuthToken;
+  }
+}
 
 // Initialize repository
-async function initializeRepository() {
+export async function initializeRepository() {
   try {
     repository = await createRepository(DATABASE_URL);
     console.log('Database repository initialized');
@@ -78,6 +89,267 @@ async function initializeRepository() {
 // Health check
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'homelab-vm-provisioner-db' });
+});
+
+app.get('/users', async (_req, res, next) => {
+  try {
+    const users = await repository.listUsers();
+    res.json({ users });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/users', async (req, res, next) => {
+  try {
+    const { id, username, role, created_at } = req.body;
+    if (!id || !username || !role) {
+      return res.status(400).json({ error: 'Missing required fields: id, username, role' });
+    }
+
+    const user = await repository.upsertUser({ id, username, role, created_at });
+    res.status(201).json({ user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/network-groups', async (_req, res, next) => {
+  try {
+    const networkGroups = await repository.listNetworkGroups();
+    res.json({ networkGroups });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/network-groups', async (req, res, next) => {
+  try {
+    const {
+      id,
+      owner_user_id,
+      name,
+      libvirt_network_name,
+      bridge_name,
+      subnet_cidr,
+      gateway_ip,
+      dhcp_start,
+      dhcp_end,
+      profile,
+      created_at,
+    } = req.body;
+
+    if (!id || !owner_user_id || !name || !profile) {
+      return res.status(400).json({ error: 'Missing required fields: id, owner_user_id, name, profile' });
+    }
+
+    const networkGroup = await repository.upsertNetworkGroup({
+      id,
+      owner_user_id,
+      name,
+      libvirt_network_name,
+      bridge_name,
+      subnet_cidr,
+      gateway_ip,
+      dhcp_start,
+      dhcp_end,
+      profile,
+      created_at,
+    });
+
+    res.status(201).json({ networkGroup });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/vm-definitions', async (_req, res, next) => {
+  try {
+    const vmDefinitions = await repository.listVmDefinitions();
+    res.json({ vmDefinitions });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/vm-definitions/by-name/:vmName', async (req, res, next) => {
+  try {
+    const vmDefinition = await repository.getVmDefinitionByName(req.params.vmName);
+    if (!vmDefinition) {
+      return res.status(404).json({ error: 'VM definition not found' });
+    }
+    res.json({ vmDefinition });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/vm-definitions/:id', async (req, res, next) => {
+  try {
+    const vmDefinitionId = Number.parseInt(req.params.id, 10);
+    if (Number.isNaN(vmDefinitionId)) {
+      return res.status(400).json({ error: 'Invalid VM definition ID' });
+    }
+    const vmDefinition = await repository.getVmDefinitionById(vmDefinitionId);
+    if (!vmDefinition) {
+      return res.status(404).json({ error: 'VM definition not found' });
+    }
+    res.json({ vmDefinition });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/vm-definitions', async (req, res, next) => {
+  try {
+    const {
+      vm_name,
+      owner_user_id,
+      network_group_id,
+      target_host_id,
+      config,
+      ssh_public_key,
+      setup_script,
+    } = req.body;
+
+    if (!vm_name || !target_host_id || !config) {
+      return res.status(400).json({ error: 'Missing required fields: vm_name, target_host_id, config' });
+    }
+
+    const vmDefinition = await repository.upsertVmDefinition({
+      vm_name,
+      owner_user_id,
+      network_group_id,
+      target_host_id,
+      config,
+      ssh_public_key,
+      setup_script,
+    });
+
+    res.status(201).json({ vmDefinition });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/vm-definition-jobs', async (req, res, next) => {
+  try {
+    const { vmDefinition, jobType, jobPayload, jobOptions } = req.body;
+    if (!vmDefinition || !jobType || !jobPayload) {
+      return res.status(400).json({ error: 'Missing required fields: vmDefinition, jobType, jobPayload' });
+    }
+
+    const result = await repository.upsertVmDefinitionAndEnqueueJob(
+      vmDefinition,
+      jobType,
+      jobPayload,
+      jobOptions || {},
+    );
+
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/vm-definitions/by-name/:vmName', async (req, res, next) => {
+  try {
+    const vmDefinition = await repository.deleteVmDefinition(req.params.vmName);
+    if (!vmDefinition) {
+      return res.status(404).json({ error: 'VM definition not found' });
+    }
+    res.json({ vmDefinition });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/vm-runtime-state', async (_req, res, next) => {
+  try {
+    const runtimeStates = await repository.listVmRuntimeStates();
+    res.json({ runtimeStates });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/vm-runtime-state/:vmName', async (req, res, next) => {
+  try {
+    const runtimeState = await repository.getVmRuntimeState(req.params.vmName);
+    if (!runtimeState) {
+      return res.status(404).json({ error: 'VM runtime state not found' });
+    }
+    res.json({ runtimeState });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/vm-runtime-state/:vmName', async (req, res, next) => {
+  try {
+    const runtimeState = await repository.upsertVmRuntimeState(req.params.vmName, req.body.state || {});
+    res.status(201).json({ runtimeState });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/vm-runtime-state/:vmName', async (req, res, next) => {
+  try {
+    const runtimeState = await repository.deleteVmRuntimeState(req.params.vmName);
+    if (!runtimeState) {
+      return res.status(404).json({ error: 'VM runtime state not found' });
+    }
+    res.json({ runtimeState });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/vm-snapshots/:vmName', async (req, res, next) => {
+  try {
+    const snapshots = await repository.listVmSnapshots(req.params.vmName);
+    res.json({ snapshots });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/vm-snapshots/:vmName/:snapshotId', async (req, res, next) => {
+  try {
+    const snapshot = await repository.getVmSnapshot(req.params.vmName, req.params.snapshotId);
+    if (!snapshot) {
+      return res.status(404).json({ error: 'VM snapshot not found' });
+    }
+    res.json({ snapshot });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/vm-snapshots/:vmName/:snapshotId', async (req, res, next) => {
+  try {
+    const snapshot = await repository.upsertVmSnapshot(
+      req.params.vmName,
+      req.params.snapshotId,
+      req.body.metadata || {},
+    );
+    res.status(201).json({ snapshot });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/vm-snapshots/:vmName/:snapshotId', async (req, res, next) => {
+  try {
+    const snapshot = await repository.deleteVmSnapshot(req.params.vmName, req.params.snapshotId);
+    if (!snapshot) {
+      return res.status(404).json({ error: 'VM snapshot not found' });
+    }
+    res.json({ snapshot });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // Enqueue job
@@ -359,7 +631,9 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  console.error('Failed to start server:', error);
-  process.exit(1);
-});
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  });
+}

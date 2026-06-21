@@ -143,6 +143,26 @@ class WorkerDaemon:
             result = self.executor.execute_job(job)
             logger.info(f"Job {job_id} completed successfully")
 
+            if not isinstance(result, dict):
+                result = {"success": bool(result)}
+
+            vm_name = result.get("vmName") or job.get("targetVmId")
+            snapshot_id = result.get("snapshotId")
+            if vm_name and result.get("deleteRuntimeState"):
+                self.db_client.delete_vm_runtime_state(vm_name)
+            elif vm_name and result.get("runtimeState"):
+                self.db_client.upsert_vm_runtime_state(vm_name, result["runtimeState"])
+            elif vm_name and result.get("runtimeStatePatch"):
+                current_runtime_state = self.db_client.get_vm_runtime_state(vm_name)
+                next_state = dict((current_runtime_state or {}).get("state") or {})
+                next_state.update(result["runtimeStatePatch"])
+                self.db_client.upsert_vm_runtime_state(vm_name, next_state)
+
+            if vm_name and snapshot_id and result.get("snapshotRecord"):
+                self.db_client.upsert_vm_snapshot(vm_name, snapshot_id, result["snapshotRecord"])
+            elif vm_name and snapshot_id and result.get("deleteSnapshotRecord"):
+                self.db_client.delete_vm_snapshot(vm_name, snapshot_id)
+
             # Mark job as succeeded
             self.db_client.mark_job_succeeded(job_id, result)
             self._log_job_event(job_id, "info", "Job completed successfully", result)
@@ -304,7 +324,7 @@ def main():  # pragma: no cover
         db_client = DatabaseClient(db_service_url, db_service_password)
 
         # Create job executor
-        executor = JobExecutor(config.provisioner_cli_path)
+        executor = JobExecutor(config.provisioner_cli_path, db_client)
 
         # Create and run worker daemon
         worker = WorkerDaemon(config, db_client, executor)

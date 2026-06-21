@@ -276,3 +276,89 @@ class DatabaseClient:
         query_string = "?" + "&".join(params) if params else ""
         response = self._request("GET", f"/jobs{query_string}")
         return response.get("jobs", [])
+
+    def get_vm_definition_by_name(self, vm_name: str) -> Optional[dict[str, Any]]:
+        """Fetch one VM definition by name."""
+        try:
+            response = self._request("GET", f"/vm-definitions/by-name/{vm_name}")
+            return response.get("vmDefinition")
+        except RuntimeError as e:
+            if "404" in str(e):
+                return None
+            raise
+
+    def list_vm_definitions(self) -> list[dict[str, Any]]:
+        """List all VM definitions."""
+        response = self._request("GET", "/vm-definitions")
+        return response.get("vmDefinitions", [])
+
+    def list_network_groups(self) -> list[dict[str, Any]]:
+        """List all network groups."""
+        response = self._request("GET", "/network-groups")
+        return response.get("networkGroups", [])
+
+    def list_vm_runtime_states(self) -> list[dict[str, Any]]:
+        """List all VM runtime state rows."""
+        response = self._request("GET", "/vm-runtime-state")
+        return response.get("runtimeStates", [])
+
+    def get_vm_runtime_state(self, vm_name: str) -> Optional[dict[str, Any]]:
+        """Fetch one VM runtime state row by VM name."""
+        try:
+            response = self._request("GET", f"/vm-runtime-state/{vm_name}")
+            return response.get("runtimeState")
+        except RuntimeError as e:
+            if "404" in str(e):
+                return None
+            raise
+
+    def upsert_vm_runtime_state(self, vm_name: str, state: dict[str, Any]) -> dict[str, Any]:
+        """Persist VM runtime state."""
+        response = self._request("POST", f"/vm-runtime-state/{vm_name}", {"state": state})
+        return response["runtimeState"]
+
+    def delete_vm_runtime_state(self, vm_name: str) -> Optional[dict[str, Any]]:
+        """Delete VM runtime state if present."""
+        try:
+            response = self._request("DELETE", f"/vm-runtime-state/{vm_name}")
+            return response.get("runtimeState")
+        except RuntimeError as e:
+            if "404" in str(e):
+                return None
+            raise
+
+    def list_vm_snapshots(self, vm_name: str) -> list[dict[str, Any]]:
+        """List snapshot records for a VM."""
+        response = self._request("GET", f"/vm-snapshots/{vm_name}")
+        return response.get("snapshots", [])
+
+    def get_vm_snapshot(self, vm_name: str, snapshot_id: str) -> Optional[dict[str, Any]]:
+        """Fetch one VM snapshot record."""
+        try:
+            response = self._request("GET", f"/vm-snapshots/{vm_name}/{snapshot_id}")
+            return response.get("snapshot")
+        except RuntimeError as e:
+            if "404" in str(e):
+                return None
+            raise
+
+    def upsert_vm_snapshot(
+        self, vm_name: str, snapshot_id: str, metadata: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Persist one VM snapshot record."""
+        response = self._request(
+            "POST",
+            f"/vm-snapshots/{vm_name}/{snapshot_id}",
+            {"metadata": metadata},
+        )
+        return response["snapshot"]
+
+    def delete_vm_snapshot(self, vm_name: str, snapshot_id: str) -> Optional[dict[str, Any]]:
+        """Delete one VM snapshot record."""
+        try:
+            response = self._request("DELETE", f"/vm-snapshots/{vm_name}/{snapshot_id}")
+            return response.get("snapshot")
+        except RuntimeError as e:
+            if "404" in str(e):
+                return None
+            raise

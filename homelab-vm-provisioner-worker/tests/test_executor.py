@@ -9,20 +9,51 @@ from hlvmp_worker.executor import JobExecutionError, JobExecutor
 class TestJobExecutor(unittest.TestCase):
     """Test job executor for provisioner operations."""
 
-    def test_init_raises_when_vmctl_missing(self):
-        """Test executor initialization fails without vmctl."""
+    def test_init_raises_when_cli_path_missing(self):
+        """Test executor initialization fails without provisioner path."""
         with (
             patch("hlvmp_worker.executor.Path.exists", return_value=False),
             self.assertRaises(ValueError) as context,
         ):
-            JobExecutor("/fake/path/to/cli")
+            JobExecutor("/fake/path/to/cli", Mock())
 
-        self.assertIn("vmctl not found", str(context.exception))
+        self.assertIn("does not exist", str(context.exception))
 
     def setUp(self):
         """Set up test fixtures."""
-        with patch("hlvmp_worker.executor.Path.exists", return_value=True):
-            self.executor = JobExecutor("/fake/path/to/cli")
+        self.db_client = Mock()
+        self.service_mode = Mock()
+        self.service_mode.create_vm.return_value = {"state": {"vm_name": "test-vm"}}
+        self.service_mode.clone_vm.return_value = {"state": {"vm_name": "test-vm"}}
+        self.service_mode.create_snapshot_record.return_value = {"snapshot_id": "snap-1"}
+        self.service_mode.restore_snapshot_record.return_value = {"runtime_state": {"vm_name": "test-vm"}}
+        self.service_mode.delete_snapshot_record.return_value = {"snapshot_id": "snap-1"}
+        with patch("hlvmp_worker.executor.Path.exists", return_value=True), patch.object(
+            JobExecutor, "_load_service_mode_module", return_value=self.service_mode
+        ):
+            self.executor = JobExecutor("/fake/path/to/cli", self.db_client)
+        self.db_client.get_vm_definition_by_name.return_value = {
+            "id": 42,
+            "vm_name": "test-vm",
+            "config": {
+                "vm": {"name": "test-vm", "user": "tester"},
+                "network": {"mode": "nat-auto"},
+            },
+        }
+        self.db_client.get_vm_runtime_state.return_value = None
+        self.db_client.list_vm_definitions.return_value = []
+        self.db_client.list_vm_runtime_states.return_value = []
+        self.db_client.list_network_groups.return_value = []
+        self.db_client.get_vm_snapshot.return_value = {
+            "vm_name": "test-vm",
+            "snapshot_id": "snap-1",
+            "metadata": {
+                "snapshot_id": "snap-1",
+                "artifact_manifest": {"snapshot_path": "/snapshots/test-vm/snap-1", "disk": "/snapshots/test-vm/snap-1/test-vm.qcow2"},
+                "config_snapshot": {"vm": {"name": "test-vm", "user": "tester"}},
+                "runtime_state_snapshot": {},
+            },
+        }
 
     def test_get_supported_job_types(self):
         """Test getting list of supported job types."""
@@ -103,54 +134,31 @@ class TestJobExecutor(unittest.TestCase):
 
         self.assertEqual(locks, ["host:host1"])
 
-    @patch("hlvmp_worker.executor.subprocess.run")
-    def test_run_vmctl_nonzero_exit_raises_job_execution_error(self, mock_run):
-        """Test vmctl failures preserve the command error message."""
-        mock_run.return_value = Mock(returncode=1, stdout="", stderr="boom")
+    def test_load_service_mode_module_missing_package_raises_job_execution_error(self):
+        with patch("hlvmp_worker.executor.Path.exists", return_value=True), patch(
+            "hlvmp_worker.executor.import_module", side_effect=ModuleNotFoundError("missing")
+        ):
+            with self.assertRaises(JobExecutionError) as context:
+                JobExecutor("/fake/path/to/cli", Mock())
 
-        with self.assertRaises(JobExecutionError) as context:
-            self.executor._run_vmctl("start", "test-vm")
-
-        self.assertIn("vmctl command failed: boom", str(context.exception))
-        self.assertTrue(context.exception.retriable)
-
-    @patch("hlvmp_worker.executor.subprocess.run", side_effect=FileNotFoundError("missing"))
-    def test_run_vmctl_missing_binary_raises_non_retriable_error(self, mock_run):
-        """Test missing vmctl binary is reported as non-retriable."""
-        with self.assertRaises(JobExecutionError) as context:
-            self.executor._run_vmctl("start", "test-vm")
-
-        self.assertIn("vmctl not found", str(context.exception))
+        self.assertIn("Could not import provisioner service module", str(context.exception))
         self.assertFalse(context.exception.retriable)
 
-    @patch("hlvmp_worker.executor.subprocess.run", side_effect=OSError("exec failed"))
-    def test_run_vmctl_unexpected_error_is_retriable(self, mock_run):
-        """Test unexpected vmctl invocation errors are retriable."""
-        with self.assertRaises(JobExecutionError) as context:
-            self.executor._run_vmctl("start", "test-vm")
-
-        self.assertIn("Failed to execute vmctl", str(context.exception))
-        self.assertTrue(context.exception.retriable)
-
-    @patch("hlvmp_worker.executor.subprocess.run")
-    @patch("hlvmp_worker.executor.Path.exists", return_value=True)
-    def test_execute_provision_vm_success(self, mock_exists, mock_run):
+    def test_execute_provision_vm_success(self):
         """Test successful VM provision execution."""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
         job = {
             "type": "provision_vm",
-            "payload": {"configPath": "/tmp/test-config.yaml"},
+            "payload": {"vmName": "test-vm"},
         }
 
         result = self.executor.execute_job(job)
 
         self.assertTrue(result["success"])
-        self.assertEqual(result["configPath"], "/tmp/test-config.yaml")
-        mock_run.assert_called_once()
+        self.assertEqual(result["vmName"], "test-vm")
+        self.service_mode.create_vm.assert_called_once()
 
-    def test_execute_provision_vm_missing_config_path(self):
-        """Test provision VM with missing config path."""
+    def test_execute_provision_vm_missing_name(self):
+        """Test provision VM with missing VM name."""
         job = {
             "type": "provision_vm",
             "payload": {},
@@ -159,27 +167,25 @@ class TestJobExecutor(unittest.TestCase):
         with self.assertRaises(JobExecutionError) as context:
             self.executor.execute_job(job)
 
-        self.assertIn("configPath", str(context.exception))
+        self.assertIn("vmName", str(context.exception))
         self.assertFalse(context.exception.retriable)
 
-    def test_execute_provision_vm_config_not_found(self):
-        """Test provision VM when config file doesn't exist."""
+    def test_execute_provision_vm_definition_not_found(self):
+        """Test provision VM when definition doesn't exist."""
+        self.db_client.get_vm_definition_by_name.return_value = None
         job = {
             "type": "provision_vm",
-            "payload": {"configPath": "/nonexistent/config.yaml"},
+            "payload": {"vmName": "missing-vm"},
         }
 
         with self.assertRaises(JobExecutionError) as context:
             self.executor.execute_job(job)
 
-        self.assertIn("not found", str(context.exception))
+        self.assertIn("definition not found", str(context.exception))
         self.assertFalse(context.exception.retriable)
 
-    @patch("hlvmp_worker.executor.subprocess.run")
-    def test_execute_destroy_vm_success(self, mock_run):
+    def test_execute_destroy_vm_success(self):
         """Test successful VM destroy execution."""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
         job = {
             "type": "destroy_vm",
             "payload": {"vmName": "test-vm"},
@@ -189,7 +195,7 @@ class TestJobExecutor(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["vmName"], "test-vm")
-        mock_run.assert_called_once()
+        self.service_mode.destroy_vm.assert_called_once_with("test-vm")
 
     def test_execute_destroy_vm_missing_name(self):
         """Test destroy VM with missing name."""
@@ -204,17 +210,13 @@ class TestJobExecutor(unittest.TestCase):
         self.assertIn("vmName", str(context.exception))
         self.assertFalse(context.exception.retriable)
 
-    @patch("hlvmp_worker.executor.subprocess.run")
-    @patch("hlvmp_worker.executor.Path.exists", return_value=True)
-    def test_execute_clone_vm_success(self, mock_exists, mock_run):
+    def test_execute_clone_vm_success(self):
         """Test successful VM clone execution."""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
         job = {
             "type": "clone_vm",
             "payload": {
                 "sourceVmName": "source-vm",
-                "configPath": "/tmp/target-config.yaml",
+                "targetVmName": "test-vm",
             },
         }
 
@@ -222,7 +224,7 @@ class TestJobExecutor(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["sourceVmName"], "source-vm")
-        mock_run.assert_called_once()
+        self.service_mode.clone_vm.assert_called_once()
 
     def test_execute_clone_vm_missing_source_name(self):
         """Test clone VM requires a source VM name."""
@@ -237,8 +239,8 @@ class TestJobExecutor(unittest.TestCase):
         self.assertIn("sourceVmName", str(context.exception))
         self.assertFalse(context.exception.retriable)
 
-    def test_execute_clone_vm_missing_config_path(self):
-        """Test clone VM requires a target config path."""
+    def test_execute_clone_vm_missing_target_name(self):
+        """Test clone VM requires a target VM name."""
         job = {
             "type": "clone_vm",
             "payload": {"sourceVmName": "source-vm"},
@@ -247,30 +249,28 @@ class TestJobExecutor(unittest.TestCase):
         with self.assertRaises(JobExecutionError) as context:
             self.executor.execute_job(job)
 
-        self.assertIn("configPath", str(context.exception))
+        self.assertIn("targetVmName", str(context.exception))
         self.assertFalse(context.exception.retriable)
 
-    def test_execute_clone_vm_config_not_found(self):
-        """Test clone VM validates the target config path exists."""
+    def test_execute_clone_vm_definition_not_found(self):
+        """Test clone VM validates the target definition exists."""
+        self.db_client.get_vm_definition_by_name.return_value = None
         job = {
             "type": "clone_vm",
             "payload": {
                 "sourceVmName": "source-vm",
-                "configPath": "/nonexistent/config.yaml",
+                "targetVmName": "missing-vm",
             },
         }
 
         with self.assertRaises(JobExecutionError) as context:
             self.executor.execute_job(job)
 
-        self.assertIn("Config file not found", str(context.exception))
+        self.assertIn("definition not found", str(context.exception))
         self.assertFalse(context.exception.retriable)
 
-    @patch("hlvmp_worker.executor.subprocess.run")
-    def test_execute_start_vm_success(self, mock_run):
+    def test_execute_start_vm_success(self):
         """Test successful VM start execution."""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
         job = {
             "type": "start_vm",
             "payload": {"vmName": "test-vm"},
@@ -279,7 +279,7 @@ class TestJobExecutor(unittest.TestCase):
         result = self.executor.execute_job(job)
 
         self.assertTrue(result["success"])
-        mock_run.assert_called_once()
+        self.service_mode.start_vm.assert_called_once_with("test-vm")
 
     def test_execute_start_vm_missing_name(self):
         """Test start VM requires a VM name."""
@@ -289,11 +289,8 @@ class TestJobExecutor(unittest.TestCase):
         self.assertIn("vmName", str(context.exception))
         self.assertFalse(context.exception.retriable)
 
-    @patch("hlvmp_worker.executor.subprocess.run")
-    def test_execute_stop_vm_success(self, mock_run):
+    def test_execute_stop_vm_success(self):
         """Test successful VM stop execution."""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
         job = {
             "type": "stop_vm",
             "payload": {"vmName": "test-vm"},
@@ -302,7 +299,7 @@ class TestJobExecutor(unittest.TestCase):
         result = self.executor.execute_job(job)
 
         self.assertTrue(result["success"])
-        mock_run.assert_called_once()
+        self.service_mode.stop_vm.assert_called_once_with("test-vm")
 
     def test_execute_stop_vm_missing_name(self):
         """Test stop VM requires a VM name."""
@@ -312,11 +309,8 @@ class TestJobExecutor(unittest.TestCase):
         self.assertIn("vmName", str(context.exception))
         self.assertFalse(context.exception.retriable)
 
-    @patch("hlvmp_worker.executor.subprocess.run")
-    def test_execute_reconcile_networking_success(self, mock_run):
+    def test_execute_reconcile_networking_success(self):
         """Test successful network reconciliation execution."""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
         job = {
             "type": "reconcile_vm_networking",
             "payload": {"policyOnly": True},
@@ -326,26 +320,20 @@ class TestJobExecutor(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertTrue(result["policyOnly"])
-        mock_run.assert_called_once()
+        self.service_mode.reconcile_vm_records.assert_called_once()
         self.assertTrue(result["policyOnly"])
 
-    @patch("hlvmp_worker.executor.subprocess.run")
-    def test_execute_reconcile_networking_defaults_policy_only_false(self, mock_run):
+    def test_execute_reconcile_networking_defaults_policy_only_false(self):
         """Test network reconciliation defaults to full reconcile."""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
         result = self.executor.execute_job(
             {"type": "reconcile_vm_networking", "payload": {}}
         )
 
         self.assertFalse(result["policyOnly"])
-        mock_run.assert_called_once()
+        self.service_mode.reconcile_vm_records.assert_called_once()
 
-    @patch("hlvmp_worker.executor.subprocess.run")
-    def test_execute_snapshot_create_success(self, mock_run):
+    def test_execute_snapshot_create_success(self):
         """Test successful snapshot creation execution."""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
         job = {
             "type": "snapshot_create",
             "payload": {"vmName": "test-vm"},
@@ -354,7 +342,7 @@ class TestJobExecutor(unittest.TestCase):
         result = self.executor.execute_job(job)
 
         self.assertTrue(result["success"])
-        mock_run.assert_called_once()
+        self.service_mode.create_snapshot_record.assert_called_once()
 
     def test_execute_snapshot_create_missing_name(self):
         """Test snapshot creation requires a VM name."""
@@ -364,11 +352,8 @@ class TestJobExecutor(unittest.TestCase):
         self.assertIn("vmName", str(context.exception))
         self.assertFalse(context.exception.retriable)
 
-    @patch("hlvmp_worker.executor.subprocess.run")
-    def test_execute_snapshot_restore_success(self, mock_run):
+    def test_execute_snapshot_restore_success(self):
         """Test successful snapshot restore execution."""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
         result = self.executor.execute_job(
             {
                 "type": "snapshot_restore",
@@ -378,7 +363,7 @@ class TestJobExecutor(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["snapshotId"], "snap-1")
-        mock_run.assert_called_once()
+        self.service_mode.restore_snapshot_record.assert_called_once()
 
     def test_execute_snapshot_restore_missing_snapshot_id(self):
         """Test snapshot restore requires a snapshot ID."""
@@ -390,11 +375,8 @@ class TestJobExecutor(unittest.TestCase):
         self.assertIn("snapshotId", str(context.exception))
         self.assertFalse(context.exception.retriable)
 
-    @patch("hlvmp_worker.executor.subprocess.run")
-    def test_execute_snapshot_delete_success(self, mock_run):
+    def test_execute_snapshot_delete_success(self):
         """Test successful snapshot deletion execution."""
-        mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
-
         result = self.executor.execute_job(
             {
                 "type": "snapshot_delete",
@@ -404,7 +386,7 @@ class TestJobExecutor(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["snapshotId"], "snap-1")
-        mock_run.assert_called_once()
+        self.service_mode.delete_snapshot_record.assert_called_once()
 
     def test_execute_snapshot_delete_missing_vm_name(self):
         """Test snapshot deletion requires a VM name."""
