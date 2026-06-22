@@ -6,20 +6,41 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SCRIPT_DIR"
+
+# Source component .env (parent vars inherited through execution sequence)
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Determine provisioner CLI path
+PROVISIONER_CLI_PATH="${PROVISIONER_CLI_PATH:-homelab-vm-provisioner-cli}"
+if [[ "$PROVISIONER_CLI_PATH" != /* ]]; then
+    PROVISIONER_DIR="$WORKSPACE_ROOT/$PROVISIONER_CLI_PATH"
+else
+    PROVISIONER_DIR="$PROVISIONER_CLI_PATH"
+fi
+
+PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$PROVISIONER_DIR/.venv}"
 
 # Parse arguments
 SKIP_SYSTEM_PACKAGES=0
 INSTALL_DEV=0
+PROVISIONER_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-system-packages)
       SKIP_SYSTEM_PACKAGES=1
+      PROVISIONER_ARGS+=("$1")
       shift
       ;;
     --dev)
       INSTALL_DEV=1
+      PROVISIONER_ARGS+=("$1")
       shift
       ;;
     --help)
@@ -28,6 +49,10 @@ while [[ $# -gt 0 ]]; do
       echo "Options:"
       echo "  --skip-system-packages  Skip system package installation"
       echo "  --dev                   Install development dependencies"
+      echo ""
+      echo "Environment variables:"
+      echo "  PROVISIONER_CLI_PATH    Path to provisioner CLI (default: ../homelab-vm-provisioner-cli)"
+      echo "  PROVISIONER_VENV_DIR    Provisioner virtualenv path (default: \$PROVISIONER_CLI_PATH/.venv)"
       exit 0
       ;;
     *)
@@ -118,11 +143,42 @@ else
   echo "==> Skipping system package installation"
 fi
 
-# Python virtual environment
+# Check for Python (required even if system packages were skipped)
+if [[ $SKIP_SYSTEM_PACKAGES -eq 1 ]]; then
+  if ! command -v python3 &> /dev/null; then
+    echo "Error: python3 not found. Please install Python 3.9+"
+    exit 1
+  fi
+fi
+
+# Check for provisioner CLI
+if [[ ! -d "$PROVISIONER_DIR" ]]; then
+  echo "Error: Provisioner CLI not found at: $PROVISIONER_DIR"
+  echo "Set PROVISIONER_CLI_PATH environment variable or create .env file"
+  exit 1
+fi
+
+if [[ ! -x "$PROVISIONER_DIR/setup" ]]; then
+  echo "Error: Provisioner setup script not found at: $PROVISIONER_DIR/setup"
+  exit 1
+fi
+
+# Setup provisioner CLI (installs dependencies in shared or separate venv)
+if [[ -d "$PROVISIONER_VENV_DIR" && ! -x "$PROVISIONER_VENV_DIR/bin/python" ]]; then
+  log "Removing incomplete provisioner virtualenv"
+  rm -rf "$PROVISIONER_VENV_DIR"
+fi
+
+mkdir -p "$(dirname "$PROVISIONER_VENV_DIR")"
+
+log "Running provisioner CLI setup"
+"$PROVISIONER_DIR/setup" "${PROVISIONER_ARGS[@]}" --venv "$PROVISIONER_VENV_DIR"
+
+# Python virtual environment for worker
 VENV_DIR=".venv"
 
 if [[ ! -d "$VENV_DIR" ]]; then
-  echo "==> Creating Python virtual environment"
+  echo "==> Creating worker Python virtual environment"
   python3 -m venv "$VENV_DIR"
 fi
 
@@ -130,20 +186,24 @@ fi
 source "$VENV_DIR/bin/activate"
 
 # Install Python package
-echo "==> Installing Python package"
+echo "==> Installing worker Python package"
 pip install --upgrade pip
 pip install -e .
 
 # Install dev dependencies
 if [[ $INSTALL_DEV -eq 1 ]]; then
-  echo "==> Installing development dependencies"
+  echo "==> Installing worker development dependencies"
   pip install -e ".[dev]"
 fi
 
 echo ""
 echo "Setup complete!"
 echo ""
-echo "To activate the virtual environment:"
+echo "Provisioner CLI installed at: $PROVISIONER_DIR"
+echo "Provisioner virtualenv: $PROVISIONER_VENV_DIR"
+echo "Worker virtualenv: $VENV_DIR"
+echo ""
+echo "To activate the worker virtual environment:"
 echo "  source $VENV_DIR/bin/activate"
 echo ""
 echo "To start the worker:"
