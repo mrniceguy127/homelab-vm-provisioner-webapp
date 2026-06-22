@@ -7,6 +7,7 @@ import logging
 import signal
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -44,6 +45,7 @@ class WorkerDaemon:
         self.shutdown_requested = False
         self.socket_server: Optional[SocketServer] = None
         self.wake_event = threading.Event()  # Event for socket wakeups
+        self._next_state_refresh_at = time.monotonic() + self.config.state_refresh_interval
 
     def _handle_signal(self, signum, frame):  # noqa: ARG002
         """Handle shutdown signals.
@@ -202,6 +204,15 @@ class WorkerDaemon:
             # Remove from active jobs
             self.active_jobs.discard(job_id)
 
+    def _refresh_runtime_state_caches(self):
+        """Refresh cached runtime state for all known service-managed VMs."""
+        try:
+            refreshed = self.executor.refresh_all_runtime_state_caches()
+            for entry in refreshed:
+                self.db_client.upsert_vm_runtime_state(entry["vmName"], entry["runtimeState"])
+        except Exception as e:
+            logger.warning(f"Runtime state refresh failed: {e}")
+
     def run(self):
         """Run the worker daemon.
 
@@ -252,6 +263,11 @@ class WorkerDaemon:
 
                     # Check if we can claim more jobs
                     available_slots = self.config.concurrency - len(futures)
+
+                    now = time.monotonic()
+                    if now >= self._next_state_refresh_at:
+                        self._refresh_runtime_state_caches()
+                        self._next_state_refresh_at = now + self.config.state_refresh_interval
 
                     if available_slots > 0:
                         try:

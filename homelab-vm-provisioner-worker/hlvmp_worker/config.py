@@ -20,6 +20,7 @@ class WorkerConfig:
         worker_id: Optional[str] = None,
         concurrency: int = 1,
         poll_interval: float = 5.0,
+        state_refresh_interval: float = 60.0,
         db_service_url: Optional[str] = None,
         db_service_password: Optional[str] = None,
         provisioner_cli_path: Optional[str] = None,
@@ -33,6 +34,7 @@ class WorkerConfig:
             worker_id: Unique worker identifier (auto-generated if None)
             concurrency: Maximum number of concurrent jobs (default: 1)
             poll_interval: Job poll interval in seconds (default: 5.0)
+            state_refresh_interval: Runtime-state refresh interval in seconds
             db_service_url: Database microservice URL (preferred)
             db_service_password: Database microservice password
             provisioner_cli_path: Path to provisioner CLI (None = use PATH)
@@ -43,6 +45,7 @@ class WorkerConfig:
         self.worker_id = worker_id or self._generate_worker_id()
         self.concurrency = max(1, concurrency)
         self.poll_interval = max(1.0, poll_interval)
+        self.state_refresh_interval = max(5.0, state_refresh_interval)
         self.db_service_url = db_service_url
         self.db_service_password = db_service_password
         self.provisioner_cli_path = self._resolve_provisioner_path(provisioner_cli_path)
@@ -99,6 +102,7 @@ class WorkerConfig:
             WORKER_ID: Optional worker identifier (auto-generated if not set)
             PROVISIONER_CONCURRENCY: Max concurrent jobs (default: 1)
             WORKER_POLL_INTERVAL: Poll interval in seconds (default: 5.0)
+            WORKER_STATE_REFRESH_INTERVAL: Runtime-state refresh interval in seconds (default: 60.0)
             PROVISIONER_CLI_PATH: Path to provisioner CLI (optional)
             WORKER_SOCKET: Unix socket path for wakeup mechanism (optional)
 
@@ -124,6 +128,7 @@ class WorkerConfig:
         worker_id = os.environ.get("WORKER_ID", None)
         concurrency = int(os.environ.get("PROVISIONER_CONCURRENCY", "1"))
         poll_interval = float(os.environ.get("WORKER_POLL_INTERVAL", "5.0"))
+        state_refresh_interval = float(os.environ.get("WORKER_STATE_REFRESH_INTERVAL", "60.0"))
         provisioner_cli_path = os.environ.get("PROVISIONER_CLI_PATH", None)
         socket_path = os.environ.get("WORKER_SOCKET", None)
 
@@ -133,6 +138,7 @@ class WorkerConfig:
             worker_id=worker_id,
             concurrency=concurrency,
             poll_interval=poll_interval,
+            state_refresh_interval=state_refresh_interval,
             db_service_url=db_service_url,
             db_service_password=db_service_password,
             provisioner_cli_path=provisioner_cli_path,
@@ -145,5 +151,6 @@ class WorkerConfig:
             f"WorkerConfig(host_id={self.host_id!r}, "
             f"worker_id={self.worker_id!r}, concurrency={self.concurrency}, "
             f"poll_interval={self.poll_interval}, "
+            f"state_refresh_interval={self.state_refresh_interval}, "
             f"provisioner_cli_path={self.provisioner_cli_path!r})"
         )

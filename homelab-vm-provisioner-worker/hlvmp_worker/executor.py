@@ -140,6 +140,29 @@ class JobExecutor:
             "vm_records": vm_records,
         }
 
+    def refresh_vm_runtime_state_cache(self, vm_name: str) -> dict[str, Any] | None:
+        """Refresh cached runtime state for one VM from live observation."""
+        vm_definition = self.db_client.get_vm_definition_by_name(vm_name)
+        if not vm_definition:
+            return None
+
+        return self.service_mode.refresh_vm_runtime_state(vm_name)
+
+    def refresh_all_runtime_state_caches(self) -> list[dict[str, Any]]:
+        """Refresh cached runtime state for all known VM definitions."""
+        refreshed_states = []
+        for vm_definition in self.db_client.list_vm_definitions():
+            try:
+                refreshed_state = self.service_mode.refresh_vm_runtime_state(vm_definition["vm_name"])
+                refreshed_states.append({
+                    "vmName": vm_definition["vm_name"],
+                    "runtimeState": refreshed_state,
+                })
+            except Exception:
+                continue
+
+        return refreshed_states
+
     def get_supported_job_types(self) -> list[str]:
         """Get list of supported job types.
 

@@ -275,6 +275,17 @@ class TestWorkerDaemon(unittest.TestCase):
         self.db_client.acquire_resource_locks.assert_not_called()
         self.db_client.release_resource_locks.assert_not_called()
 
+    def test_refresh_runtime_state_caches_updates_db(self):
+        self.executor.refresh_all_runtime_state_caches.return_value = [
+            {"vmName": "demo", "runtimeState": {"status": "running"}},
+            {"vmName": "clonebox", "runtimeState": {"status": "stopped"}},
+        ]
+
+        self.worker._refresh_runtime_state_caches()
+
+        self.db_client.upsert_vm_runtime_state.assert_any_call("demo", {"status": "running"})
+        self.db_client.upsert_vm_runtime_state.assert_any_call("clonebox", {"status": "stopped"})
+
     def test_run_no_jobs_available(self):
         """Test run loop when no jobs are available."""
         # Health check passes
