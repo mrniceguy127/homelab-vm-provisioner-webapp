@@ -230,6 +230,7 @@ class JobExecutor:
             JobExecutionError: If job execution fails
         """
         job_type = job["type"]
+        job_id = job.get("id")
         payload = job.get("payload", {})
 
         handler = self._handlers.get(job_type)
@@ -239,7 +240,7 @@ class JobExecutor:
             )
 
         try:
-            return handler(payload)
+            return handler(payload, job_id=job_id)
         except JobExecutionError:
             raise
         except Exception as e:
@@ -247,11 +248,28 @@ class JobExecutor:
                 f"Job execution failed: {e}", retriable=True
             ) from e
 
-    def _execute_provision_vm(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _log_event(self, job_id: int | None, level: str, message: str, metadata: dict | None = None):
+        """Log a job event if job_id is available.
+        
+        Args:
+            job_id: Job ID (optional)
+            level: Event level (info, warning, error)
+            message: Event message
+            metadata: Optional metadata dict
+        """
+        if job_id:
+            try:
+                self.db_client.append_job_event(job_id, level, message, metadata)
+            except Exception:
+                # Don't fail the job if logging fails
+                pass
+
+    def _execute_provision_vm(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute VM provision job.
 
         Args:
             payload: Job payload with vmName
+            job_id: Optional job ID for logging
 
         Returns:
             Job result data
@@ -265,13 +283,22 @@ class JobExecutor:
                 "Missing required field: vmName", retriable=False
             )
 
+        self._log_event(job_id, "info", f"Loading VM definition for {vm_name}")
         vm_definition = self._load_vm_definition(vm_name)
+        
+        self._log_event(job_id, "info", "Building network reconciliation payload")
         reconcile_payload = self._build_reconcile_payload(False)
+        
+        self._log_event(job_id, "info", "Creating VM with provisioner")
         self.service_mode.create_vm(
             self._build_service_config(vm_definition),
             reconcile_payload=reconcile_payload,
         )
+        
+        self._log_event(job_id, "info", "Refreshing VM runtime state")
         runtime_state = self.service_mode.refresh_vm_runtime_state(vm_name)
+        
+        self._log_event(job_id, "info", "VM provisioned successfully")
         return {
             "success": True,
             "vmName": vm_name,
@@ -280,11 +307,12 @@ class JobExecutor:
             "message": "VM provisioned successfully",
         }
 
-    def _execute_destroy_vm(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_destroy_vm(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute VM destroy job.
 
         Args:
             payload: Job payload with vmName
+            job_id: Optional job ID for logging
 
         Returns:
             Job result data
@@ -298,6 +326,7 @@ class JobExecutor:
                 "Missing required field: vmName", retriable=False
             )
 
+        self._log_event(job_id, "info", f"Destroying VM {vm_name}")
         self.service_mode.destroy_vm(vm_name)
         return {
             "success": True,
@@ -306,11 +335,12 @@ class JobExecutor:
             "message": "VM destroyed successfully",
         }
 
-    def _execute_clone_vm(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_clone_vm(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute VM clone job.
 
         Args:
             payload: Job payload with sourceVmName and targetVmName
+            job_id: Optional job ID for logging
 
         Returns:
             Job result data
@@ -347,11 +377,12 @@ class JobExecutor:
             "message": "VM cloned successfully",
         }
 
-    def _execute_start_vm(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_start_vm(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute VM start job.
 
         Args:
             payload: Job payload with vmName
+            job_id: Optional job ID for logging
 
         Returns:
             Job result data
@@ -374,7 +405,7 @@ class JobExecutor:
             "message": "VM started successfully",
         }
 
-    def _execute_stop_vm(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_stop_vm(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute VM stop job.
 
         Args:
@@ -401,7 +432,7 @@ class JobExecutor:
             "message": "VM stopped successfully",
         }
 
-    def _execute_reconcile_networking(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_reconcile_networking(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute network reconciliation job.
 
         Args:
@@ -428,7 +459,7 @@ class JobExecutor:
             "message": "Network reconciliation completed successfully",
         }
 
-    def _execute_refresh_runtime_state(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_refresh_runtime_state(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute runtime state refresh job.
 
         Args:
@@ -456,7 +487,7 @@ class JobExecutor:
             "message": "Runtime state refreshed successfully",
         }
 
-    def _execute_snapshot_create(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_snapshot_create(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute snapshot creation job.
 
         Args:
@@ -491,7 +522,7 @@ class JobExecutor:
             "message": "Snapshot created successfully",
         }
 
-    def _execute_snapshot_restore(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_snapshot_restore(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute snapshot restore job.
 
         Args:
@@ -538,7 +569,7 @@ class JobExecutor:
             "message": "Snapshot restored successfully",
         }
 
-    def _execute_snapshot_delete(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_snapshot_delete(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute snapshot deletion job.
 
         Args:
@@ -581,7 +612,7 @@ class JobExecutor:
             "message": "Snapshot deleted successfully",
         }
 
-    def _execute_collect_vm_logs(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _execute_collect_vm_logs(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Collect VM logs from libvirt and store in database.
 
         Enforces 1MB size limit per VM log snapshot.
