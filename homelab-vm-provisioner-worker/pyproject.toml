@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "homelab-vm-provisioner-worker"
+version = "0.1.0"
+description = "Worker daemon for VM provisioning job queue"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Homelab VM Provisioner Contributors"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.1.0",
+    "coverage>=7.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hlvmp_worker*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "DTZ", "T10", "ISC", "ICN", "PIE", "PYI", "RSE", "RET", "SIM", "TID", "ARG", "PLE", "PLW", "RUF"]
+ignore = ["E501", "N802", "N806"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["ARG", "PLR2004"]
+
+[tool.coverage.run]
+branch = true
+source = ["hlvmp_worker"]
+data_file = ".build/coverage/.coverage"
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = false
+
+[tool.coverage.html]
+directory = ".build/coverage/html"
+
+[tool.coverage.xml]
+output = ".build/coverage/coverage.xml"

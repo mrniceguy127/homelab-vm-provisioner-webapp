@@ -4,3 +4,6 @@
 [submodule "homelab-vm-provisioner-api"]
 	path = homelab-vm-provisioner-api
 	url = git@github.com:mrniceguy127/homelab-vm-provisioner-api.git
+[submodule "homelab-vm-provisioner-cli"]
+	path = homelab-vm-provisioner-cli
+	url = git@github.com:mrniceguy127/homelab-vm-provisioner-cli.git

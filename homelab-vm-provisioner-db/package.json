@@ -1,0 +1,26 @@
+{
+  "name": "homelab-vm-provisioner-db",
+  "version": "1.0.0",
+  "description": "PostgreSQL database microservice for async provisioner jobs",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "migrate": "./build",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [
+    "database",
+    "postgres",
+    "provisioner",
+    "jobs",
+    "microservice"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {}
+}

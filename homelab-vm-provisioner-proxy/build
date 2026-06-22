@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROXY_DIR="$SCRIPT_DIR"
 
 # Source component .env (parent vars inherited through execution sequence)
@@ -12,18 +11,47 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
     set +a
 fi
 
+# Parse arguments
+DOCKER_MODE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --docker)
+            DOCKER_MODE=true
+            ;;
+        --help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Build proxy."
+            echo ""
+            echo "Options:"
+            echo "  --docker    Build Docker image"
+            echo "  --help      Show this help message"
+            echo ""
+            echo "Default: No build needed for native Node.js runtime"
+            exit 0
+            ;;
+    esac
+done
+
 log() {
     printf '==> %s\n' "$*"
 }
 
-# Check if static files exist
-if [[ ! -f "$PROXY_DIR/public/index.html" ]]; then
-    log "Static files not found. Building client with Docker..."
-    "$WORKSPACE_ROOT/homelab-vm-provisioner-client/build"
+if [[ "$DOCKER_MODE" == "true" ]]; then
+    # Check if static files exist in public/ directory
+    if [[ ! -f "$PROXY_DIR/public/index.html" ]]; then
+        log "Error: Static files not found in $PROXY_DIR/public/"
+        log "Run the monorepo build script to deploy client files first"
+        exit 1
+    fi
+
+    log "Building proxy Docker image"
+    docker build -t homelab-vm-provisioner-proxy "$PROXY_DIR"
+
+    log "Proxy Docker image built successfully"
+    log "Image: homelab-vm-provisioner-proxy:latest"
+else
+    log "Native mode: No build needed"
+    log "Proxy will run with npm start"
 fi
-
-log "Building proxy Docker image"
-docker build -t homelab-vm-provisioner-proxy "$PROXY_DIR"
-
-log "Proxy Docker image built successfully"
-log "Image: homelab-vm-provisioner-proxy:latest"

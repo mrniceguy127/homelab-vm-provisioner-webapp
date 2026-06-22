@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source component .env (parent vars inherited through execution sequence)
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Parse arguments
+DOCKER_MODE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --docker)
+            DOCKER_MODE=true
+            ;;
+        --help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Build/prepare database infrastructure."
+            echo ""
+            echo "Options:"
+            echo "  --docker    Pull PostgreSQL Docker image"
+            echo "  --help      Show this help message"
+            echo ""
+            echo "Default: Verify native PostgreSQL installation"
+            exit 0
+            ;;
+    esac
+done
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+has_modular_database_config() {
+    [[ -n "${POSTGRES_HOST+x}" || -n "${POSTGRES_PORT+x}" || -n "${POSTGRES_USER+x}" || -n "${POSTGRES_PASSWORD+x}" || -n "${POSTGRES_DB+x}" ]]
+}
+
+has_database_config() {
+    has_modular_database_config || [[ -n "${DATABASE_URL:-}" ]]
+}
+
+psql_db() {
+    if has_modular_database_config; then
+        PGHOST="${POSTGRES_HOST:-localhost}" \
+        PGPORT="${POSTGRES_PORT:-5432}" \
+        PGUSER="${POSTGRES_USER:-hlvmp}" \
+        PGPASSWORD="${POSTGRES_PASSWORD:-hlvmppass}" \
+        PGDATABASE="${POSTGRES_DB:-hlvmp}" \
+            psql "$@"
+        return
+    fi
+
+    psql "$DATABASE_URL" "$@"
+}
+
+describe_database_target() {
+    if has_modular_database_config; then
+        printf '%s@%s:%s/%s' \
+            "${POSTGRES_USER:-hlvmp}" \
+            "${POSTGRES_HOST:-localhost}" \
+            "${POSTGRES_PORT:-5432}" \
+            "${POSTGRES_DB:-hlvmp}"
+        return
+    fi
+
+    printf 'DATABASE_URL'
+}
+
+if [[ "$DOCKER_MODE" == true ]]; then
+    # Docker mode: build custom image with PostgreSQL + microservice
+    if ! command -v docker >/dev/null 2>&1; then
+        log "Error: Docker not found. Install Docker Engine."
+        exit 1
+    fi
+    
+    log "Building hlvmp-db Docker image (PostgreSQL + microservice)"
+    docker build -t hlvmp-db:latest "$SCRIPT_DIR"
+    
+    log ""
+    log "Build complete - Docker image ready: hlvmp-db:latest"
+    log ""
+    log "The container will run migrations automatically on startup."
+    log "Start the container:"
+    log "  ./start --docker"
+else
+    # Native mode: verify PostgreSQL is installed
+    log "Verifying native PostgreSQL installation"
+    
+    if ! command -v psql >/dev/null 2>&1; then
+        log "Error: PostgreSQL client (psql) not found"
+        log "Run ./setup to install PostgreSQL"
+        exit 1
+    fi
+    
+    PSQL_VERSION=$(psql --version | head -n1)
+    log "Found: $PSQL_VERSION"
+    
+    # Run migrations if database connection settings are available
+    if has_database_config; then
+        log "Running database migrations against $(describe_database_target)"
+        
+        # Create migration_history table if not exists
+        psql_db <<'EOF'
+CREATE TABLE IF NOT EXISTS migration_history (
+    version VARCHAR(255) PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+EOF
+        
+        # Get list of applied migrations
+        APPLIED_MIGRATIONS=$(psql_db -t -c "SELECT version FROM migration_history ORDER BY version" | tr -d ' ')
+        
+        # Apply each migration file
+        MIGRATION_DIR="$SCRIPT_DIR/migrations"
+        if [[ -d "$MIGRATION_DIR" ]]; then
+            for migration_file in "$MIGRATION_DIR"/*.sql; do
+                if [[ -f "$migration_file" ]]; then
+                    migration_name=$(basename "$migration_file" .sql)
+                    
+                    if echo "$APPLIED_MIGRATIONS" | grep -q "^${migration_name}$"; then
+                        log "✓ $migration_name (already applied)"
+                    else
+                        log "→ Applying $migration_name..."
+                        if psql_db < "$migration_file"; then
+                            psql_db -c "INSERT INTO migration_history (version) VALUES ('$migration_name')"
+                            log "✓ $migration_name applied successfully"
+                        else
+                            log "✗ $migration_name failed"
+                            exit 1
+                        fi
+                    fi
+                fi
+            done
+        fi
+        
+        log ""
+        log "Build complete - database ready"
+    else
+        log ""
+        log "Build complete"
+        log ""
+        log "To run migrations, set POSTGRES_HOST/POSTGRES_PORT/POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB"
+        log "or DATABASE_URL and run:"
+        log "  ./build"
+    fi
+fi

@@ -16,7 +16,8 @@ RUN npm ci --only=production
 COPY src/ ./src/
 
 # Create empty public directory (will be populated via volume or COPY)
-RUN mkdir -p public
+#RUN mkdir -p public
+COPY public/ ./public/
 
 # Expose proxy port
 EXPOSE 3000

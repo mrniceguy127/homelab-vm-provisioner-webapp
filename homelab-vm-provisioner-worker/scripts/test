@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Activate virtual environment
+if [[ ! -d "$ROOT_DIR/.venv" ]]; then
+    printf 'Virtual environment not found. Run ./setup --dev first.\n' >&2
+    exit 1
+fi
+
+source "$ROOT_DIR/.venv/bin/activate"
+
+# Check for dev dependencies
+if ! python -m ruff --version >/dev/null 2>&1; then
+    printf 'Ruff is unavailable. Skipping linting (run ./setup --dev to enable).\n' >&2
+else
+    # Run linting before tests
+    if ! python -m ruff check "$ROOT_DIR/hlvmp_worker" "$ROOT_DIR/tests"; then
+        printf 'Warning: Linting issues found. Fix them before committing.\n' >&2
+    fi
+fi
+
+# Run tests
+exec python -m unittest discover -s "$ROOT_DIR/tests"

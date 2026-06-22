@@ -4,7 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
-PROXY_PUBLIC_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy/public"
+DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
+PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
+PROXY_PUBLIC_DIR="$PROXY_DIR/public"
 
 # Source .env file if it exists
 if [[ -f "$ROOT_DIR/.env" ]]; then
@@ -13,16 +15,30 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
     set +a
 fi
 
+# Build mode defaults (can be overridden by .env)
+ENABLE_CLIENT="${ENABLE_CLIENT:-true}"
+ENABLE_API="${ENABLE_API:-true}"
+ENABLE_DB_SERVICE="${ENABLE_DB_SERVICE:-true}"
+ENABLE_DB="${ENABLE_DB:-true}"
+
 # Parse arguments
 USE_DOCKER=false
-CLIENT_ONLY=false
+BUILD_ARGS=()
 for arg in "$@"; do
     case "$arg" in
+        --client-only)
+            # Legacy flag support - sets mode flags
+            ENABLE_CLIENT=true
+            ENABLE_API=false
+            ENABLE_DB_SERVICE=false
+            ENABLE_DB=false
+            ;;
         --docker)
             USE_DOCKER=true
+            BUILD_ARGS+=("$arg")
             ;;
-        --client-only)
-            CLIENT_ONLY=true
+        *)
+            BUILD_ARGS+=("$arg")
             ;;
     esac
 done
@@ -31,27 +47,41 @@ log() {
     printf '==> %s\n' "$*"
 }
 
-if [[ "$CLIENT_ONLY" == "false" ]]; then
-    log "Building API (docs)"
-    npm --prefix "$API_DIR" run build
-else
-    log "Client-only mode: skipping API build"
+# Display enabled services
+log "Build mode configuration:"
+log "  CLIENT:      $ENABLE_CLIENT"
+log "  API:         $ENABLE_API"
+log "  DB_SERVICE:  $ENABLE_DB_SERVICE"
+log "  DB:          $ENABLE_DB"
+log ""
+
+# Build components
+if [[ "$ENABLE_DB" == "true" || "$ENABLE_DB_SERVICE" == "true" ]]; then
+    log "Building database"
+    "$DB_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
 fi
 
-if [[ "$USE_DOCKER" == "true" ]]; then
-    log "Building client with Docker"
-    "$CLIENT_DIR/build"
-    
-    log "Building client docs (local)"
-    npm --prefix "$CLIENT_DIR" run docs:build
-else
-    log "Building client (app + docs)"
-    npm --prefix "$CLIENT_DIR" run build
-    
-    log "Deploying client bundle to proxy public directory"
+if [[ "$ENABLE_API" == "true" ]]; then
+    log "Building API"
+    "$API_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
+fi
+
+if [[ "$ENABLE_CLIENT" == "true" ]]; then
+    log "Building client"
+    "$CLIENT_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
+
+    # Wire up client artifacts to proxy
+    log "Deploying client artifacts to proxy"
     rm -rf "$PROXY_PUBLIC_DIR"
     mkdir -p "$PROXY_PUBLIC_DIR"
     cp -R "$CLIENT_DIR/dist/." "$PROXY_PUBLIC_DIR/"
+    log "Client files deployed to: $PROXY_PUBLIC_DIR"
+
+    # Build proxy Docker image if in Docker mode
+    if [[ "$USE_DOCKER" == "true" ]]; then
+        log "Building proxy Docker image"
+        "$PROXY_DIR/build" --docker
+    fi
 fi
 
 log "Workspace build complete"

@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$SCRIPT_DIR"
+
+# Source component .env (parent vars inherited through execution sequence)
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Parse arguments
+SKIP_NPM=false
+SKIP_SYSTEM_PACKAGES=false
+DOCKER_MODE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --skip-npm)
+            SKIP_NPM=true
+            ;;
+        --skip-system-packages)
+            SKIP_SYSTEM_PACKAGES=true
+            ;;
+        --docker)
+            DOCKER_MODE=true
+            ;;
+        --help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Setup the database environment."
+            echo ""
+            echo "Options:"
+            echo "  --skip-npm               Skip npm install"
+            echo "  --skip-system-packages   Skip system package installation"
+            echo "  --docker                 Setup for Docker mode (skip PostgreSQL server install)"
+            echo "  --help                   Show this help message"
+            echo ""
+            echo "Default: Install PostgreSQL server and client natively"
+            exit 0
+            ;;
+    esac
+done
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+run_sudo() {
+    if [[ "${EUID}" -eq 0 ]]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+ensure_sudo_credentials() {
+    local reason="$1"
+
+    if [[ "${EUID}" -eq 0 ]]; then
+        return
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        printf 'sudo is required for this setup step but is not installed.\n' >&2
+        exit 1
+    fi
+
+    if sudo -n -v >/dev/null 2>&1; then
+        return
+    fi
+
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        printf '%s\n' "$reason" >&2
+        printf 'Run this script from an interactive terminal or pre-authorize sudo with `sudo -v` first.\n' >&2
+        exit 1
+    fi
+
+    log "$reason"
+    sudo -v
+}
+
+# Install system packages
+if [[ "$SKIP_SYSTEM_PACKAGES" == false ]]; then
+    ensure_sudo_credentials "Installing database system packages requires sudo access. Confirm it now before package installation begins."
+    log "Checking system packages"
+    
+    if [[ "$DOCKER_MODE" == true ]]; then
+        # Docker mode: only need client tools
+        log "Docker mode: Installing PostgreSQL client only"
+        
+        if command -v apt-get >/dev/null 2>&1; then
+            # Debian/Ubuntu
+            if ! dpkg -l postgresql-client >/dev/null 2>&1; then
+                log "Installing postgresql-client"
+                run_sudo apt-get update
+                run_sudo apt-get install -y postgresql-client
+            fi
+        elif command -v dnf >/dev/null 2>&1; then
+            # RHEL/Fedora/Rocky/Alma
+            if ! rpm -q postgresql >/dev/null 2>&1; then
+                log "Installing postgresql"
+                run_sudo dnf install -y postgresql
+            fi
+        elif command -v yum >/dev/null 2>&1; then
+            # Older RHEL/CentOS
+            if ! rpm -q postgresql >/dev/null 2>&1; then
+                log "Installing postgresql"
+                run_sudo yum install -y postgresql
+            fi
+        elif command -v pacman >/dev/null 2>&1; then
+            # Arch Linux
+            if ! pacman -Q postgresql-libs >/dev/null 2>&1; then
+                log "Installing postgresql-libs"
+                run_sudo pacman -S --noconfirm postgresql-libs
+            fi
+        elif command -v zypper >/dev/null 2>&1; then
+            # openSUSE
+            if ! rpm -q postgresql >/dev/null 2>&1; then
+                log "Installing postgresql"
+                run_sudo zypper install -y postgresql
+            fi
+        else
+            log "Error: Unsupported distribution. Please install PostgreSQL client manually."
+            exit 1
+        fi
+        
+        # Check for Docker
+        if ! command -v docker >/dev/null 2>&1; then
+            log "Error: Docker not found. Install Docker Engine."
+            log "See: https://docs.docker.com/engine/install/"
+            exit 1
+        fi
+    else
+        # Native mode: install PostgreSQL server and client
+        log "Native mode: Installing PostgreSQL server and client"
+        
+        if command -v apt-get >/dev/null 2>&1; then
+            # Debian/Ubuntu
+            if ! dpkg -l postgresql >/dev/null 2>&1; then
+                log "Installing postgresql"
+                run_sudo apt-get update
+                run_sudo apt-get install -y postgresql postgresql-contrib
+            fi
+        elif command -v dnf >/dev/null 2>&1; then
+            # RHEL/Fedora/Rocky/Alma
+            if ! rpm -q postgresql-server >/dev/null 2>&1; then
+                log "Installing postgresql-server"
+                run_sudo dnf install -y postgresql-server postgresql-contrib
+                log "Initializing PostgreSQL database"
+                run_sudo postgresql-setup --initdb || true
+            fi
+        elif command -v yum >/dev/null 2>&1; then
+            # Older RHEL/CentOS
+            if ! rpm -q postgresql-server >/dev/null 2>&1; then
+                log "Installing postgresql-server"
+                run_sudo yum install -y postgresql-server postgresql-contrib
+                log "Initializing PostgreSQL database"
+                run_sudo postgresql-setup initdb || true
+            fi
+        elif command -v pacman >/dev/null 2>&1; then
+            # Arch Linux
+            if ! pacman -Q postgresql >/dev/null 2>&1; then
+                log "Installing postgresql"
+                run_sudo pacman -S --noconfirm postgresql
+                log "Initializing PostgreSQL database"
+                run_sudo -u postgres initdb -D /var/lib/postgres/data || true
+            fi
+        elif command -v zypper >/dev/null 2>&1; then
+            # openSUSE
+            if ! rpm -q postgresql-server >/dev/null 2>&1; then
+                log "Installing postgresql-server"
+                run_sudo zypper install -y postgresql-server postgresql-contrib
+            fi
+        else
+            log "Error: Unsupported distribution. Please install PostgreSQL manually."
+            exit 1
+        fi
+        
+        log "PostgreSQL installed. Use './start' to start the service."
+    fi
+else
+    log "Skipping system package installation"
+fi
+
+# Install npm dependencies
+if [[ "$SKIP_NPM" == false ]]; then
+    log "Installing npm dependencies"
+    npm install
+else
+    log "Skipping npm install"
+fi
+
+log "Database setup complete"
+log ""
+log "Next steps:"
+if [[ "$DOCKER_MODE" == true ]]; then
+    log "  ./start --docker    # Start PostgreSQL in Docker"
+else
+    log "  ./start             # Start PostgreSQL natively"
+fi
+log "  npm run migrate     # Run database migrations"

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$SCRIPT_DIR"
 
 # Source component .env (parent vars inherited through execution sequence)
 if [[ -f "$SCRIPT_DIR/.env" ]]; then
@@ -14,6 +15,7 @@ fi
 # Parse arguments
 SKIP_NPM=false
 SKIP_SYSTEM_PACKAGES=false
+DOCKER_MODE=false
 
 for arg in "$@"; do
     case "$arg" in
@@ -23,15 +25,22 @@ for arg in "$@"; do
         --skip-system-packages)
             SKIP_SYSTEM_PACKAGES=true
             ;;
+        --docker)
+            DOCKER_MODE=true
+            SKIP_NPM=true
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Setup the reverse proxy environment."
             echo ""
             echo "Options:"
-            echo "  --skip-npm               Skip npm install (for Docker runtime)"
+            echo "  --skip-npm               Skip npm install"
             echo "  --skip-system-packages   Skip system package installation"
+            echo "  --docker                 Setup for Docker mode (skip npm install)"
             echo "  --help                   Show this help message"
+            echo ""
+            echo "Default: Setup for native Node.js runtime"
             exit 0
             ;;
     esac
@@ -47,6 +56,32 @@ run_sudo() {
     else
         sudo "$@"
     fi
+}
+
+ensure_sudo_credentials() {
+    local reason="$1"
+
+    if [[ "${EUID}" -eq 0 ]]; then
+        return
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        printf 'sudo is required for this setup step but is not installed.\n' >&2
+        exit 1
+    fi
+
+    if sudo -n -v >/dev/null 2>&1; then
+        return
+    fi
+
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        printf '%s\n' "$reason" >&2
+        printf 'Run this script from an interactive terminal or pre-authorize sudo with `sudo -v` first.\n' >&2
+        exit 1
+    fi
+
+    log "$reason"
+    sudo -v
 }
 
 require_cmd() {
@@ -128,6 +163,7 @@ install_system_packages() {
 
 # Install system packages if not skipped
 if [[ "$SKIP_SYSTEM_PACKAGES" == "false" ]]; then
+    ensure_sudo_credentials "Installing proxy system packages requires sudo access. Confirm it now before package installation begins."
     install_system_packages
 fi
 

@@ -4,12 +4,12 @@ Complete guide for running the homelab VM provisioner with Docker.
 
 ## Overview
 
-Docker mode runs the reverse proxy in a container while keeping the API on the host (needed for libvirt access).
+Docker mode runs the database microservice, API, and reverse proxy in containers while the worker remains on the host.
 
 ```
-Browser → Proxy Container (3000) → API Host (3001) → Python CLI → libvirt
-         ↓
-      Static Files (volume mount)
+Browser → Proxy Container (3000) → API Container (3001) → DB Service Host/Container (3002)
+         ↓                                             ↓
+      Static Files (volume mount)                 Worker Socket / CLI data
 ```
 
 ## Quick Start
@@ -66,7 +66,8 @@ This will:
 ```
 
 This runs:
-- API on host (port 3001)
+- Database microservice in Docker (port 3002 when enabled)
+- API in Docker (port 3001)
 - Proxy in Docker (port 3000)
 
 ## Configuration
@@ -79,6 +80,9 @@ PROXY_PORT=8080 API_PORT=8081 ./start --docker
 
 # Python environment
 PROVISIONER_VENV_DIR=/custom/path ./setup --docker
+
+# Provisioner data directory from workspace root
+PROVISIONER_DATA_DIR=.provisioner-data ./start --docker
 ```
 
 ### Port Mapping
