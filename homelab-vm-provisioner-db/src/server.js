@@ -524,6 +524,23 @@ app.post('/jobs/:id/events', async (req, res, next) => {
   }
 });
 
+// Delete job events for a VM
+app.delete('/vms/:vmName/job-events', async (req, res, next) => {
+  try {
+    const { vmName } = req.params;
+    
+    if (!vmName) {
+      return res.status(400).json({ error: 'VM name is required' });
+    }
+    
+    const deletedCount = await repository.deleteJobEventsForVm(vmName);
+    
+    res.json({ deletedCount });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Cancel job
 app.post('/jobs/:id/cancel', async (req, res, next) => {
   try {

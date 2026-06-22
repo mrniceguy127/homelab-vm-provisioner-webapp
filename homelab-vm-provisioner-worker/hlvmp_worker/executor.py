@@ -283,29 +283,72 @@ class JobExecutor:
                 "Missing required field: vmName", retriable=False
             )
 
+        # Clean up old job events for this VM (handles recreates)
+        try:
+            self.db_client.delete_job_events_for_vm(vm_name)
+        except Exception:
+            # Don't fail if cleanup fails
+            pass
+
         self._log_event(job_id, "info", f"Loading VM definition for {vm_name}")
         vm_definition = self._load_vm_definition(vm_name)
+        
+        # Log storage allocation
+        vm_config = vm_definition.get("config", {}).get("vm", {})
+        disk_gb = vm_config.get("disk_gb", 0)
+        ram_mb = vm_config.get("ram_mb", 0)
+        self._log_event(
+            job_id,
+            "info",
+            f"Storage allocation: {disk_gb}GB disk, {ram_mb}MB RAM",
+            {"disk_gb": disk_gb, "ram_mb": ram_mb}
+        )
         
         self._log_event(job_id, "info", "Building network reconciliation payload")
         reconcile_payload = self._build_reconcile_payload(False)
         
-        self._log_event(job_id, "info", "Creating VM with provisioner")
-        self.service_mode.create_vm(
-            self._build_service_config(vm_definition),
-            reconcile_payload=reconcile_payload,
-        )
-        
-        self._log_event(job_id, "info", "Refreshing VM runtime state")
-        runtime_state = self.service_mode.refresh_vm_runtime_state(vm_name)
-        
-        self._log_event(job_id, "info", "VM provisioned successfully")
-        return {
-            "success": True,
-            "vmName": vm_name,
-            "vmDefinitionId": vm_definition["id"],
-            "runtimeState": runtime_state,
-            "message": "VM provisioned successfully",
-        }
+        try:
+            self._log_event(job_id, "info", "Creating VM with provisioner")
+            self.service_mode.create_vm(
+                self._build_service_config(vm_definition),
+                reconcile_payload=reconcile_payload,
+            )
+            
+            self._log_event(job_id, "info", "Refreshing VM runtime state")
+            runtime_state = self.service_mode.refresh_vm_runtime_state(vm_name)
+            
+            self._log_event(job_id, "info", "VM provisioned successfully")
+            
+            # Clean up job events on successful completion
+            try:
+                self.db_client.delete_job_events_for_vm(vm_name)
+            except Exception:
+                # Don't fail if cleanup fails
+                pass
+            
+            return {
+                "success": True,
+                "vmName": vm_name,
+                "vmDefinitionId": vm_definition["id"],
+                "runtimeState": runtime_state,
+                "message": "VM provisioned successfully",
+            }
+        except Exception as error:
+            # Destroy the VM if creation failed
+            self._log_event(job_id, "error", f"VM creation failed: {error}")
+            try:
+                self._log_event(job_id, "info", "Destroying partially created VM")
+                self.service_mode.destroy_vm(vm_name)
+                self._log_event(job_id, "info", "Partial VM destroyed successfully")
+            except Exception as cleanup_error:
+                self._log_event(
+                    job_id,
+                    "warning",
+                    f"Failed to destroy partial VM: {cleanup_error}"
+                )
+            
+            # Re-raise the original error
+            raise
 
     def _execute_destroy_vm(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute VM destroy job.
@@ -328,6 +371,14 @@ class JobExecutor:
 
         self._log_event(job_id, "info", f"Destroying VM {vm_name}")
         self.service_mode.destroy_vm(vm_name)
+        
+        # Clean up job events after destroying VM
+        try:
+            self.db_client.delete_job_events_for_vm(vm_name)
+        except Exception:
+            # Don't fail if cleanup fails
+            pass
+        
         return {
             "success": True,
             "vmName": vm_name,
@@ -360,22 +411,74 @@ class JobExecutor:
                 "Missing required field: targetVmName", retriable=False
             )
 
+        # Clean up old job events for target VM (handles reclones)
+        try:
+            self.db_client.delete_job_events_for_vm(target_vm_name)
+        except Exception:
+            # Don't fail if cleanup fails
+            pass
+
+        self._log_event(job_id, "info", f"Loading VM definition for {target_vm_name}")
         vm_definition = self._load_vm_definition(target_vm_name)
-        reconcile_payload = self._build_reconcile_payload(False)
-        self.service_mode.clone_vm(
-            source_vm_name,
-            self._build_service_config(vm_definition),
-            reconcile_payload=reconcile_payload,
+        
+        # Log storage allocation
+        vm_config = vm_definition.get("config", {}).get("vm", {})
+        disk_gb = vm_config.get("disk_gb", 0)
+        ram_mb = vm_config.get("ram_mb", 0)
+        self._log_event(
+            job_id,
+            "info",
+            f"Storage allocation: {disk_gb}GB disk, {ram_mb}MB RAM",
+            {"disk_gb": disk_gb, "ram_mb": ram_mb}
         )
-        runtime_state = self.service_mode.refresh_vm_runtime_state(target_vm_name)
-        return {
-            "success": True,
-            "sourceVmName": source_vm_name,
-            "targetVmName": target_vm_name,
-            "vmDefinitionId": vm_definition["id"],
-            "runtimeState": runtime_state,
-            "message": "VM cloned successfully",
-        }
+        
+        self._log_event(job_id, "info", "Building network reconciliation payload")
+        reconcile_payload = self._build_reconcile_payload(False)
+        
+        try:
+            self._log_event(job_id, "info", f"Cloning VM from {source_vm_name}")
+            self.service_mode.clone_vm(
+                source_vm_name,
+                self._build_service_config(vm_definition),
+                reconcile_payload=reconcile_payload,
+            )
+            
+            self._log_event(job_id, "info", "Refreshing VM runtime state")
+            runtime_state = self.service_mode.refresh_vm_runtime_state(target_vm_name)
+            
+            self._log_event(job_id, "info", "VM cloned successfully")
+            
+            # Clean up job events on successful completion
+            try:
+                self.db_client.delete_job_events_for_vm(target_vm_name)
+            except Exception:
+                # Don't fail if cleanup fails
+                pass
+            
+            return {
+                "success": True,
+                "sourceVmName": source_vm_name,
+                "targetVmName": target_vm_name,
+                "vmDefinitionId": vm_definition["id"],
+                "runtimeState": runtime_state,
+                "message": "VM cloned successfully",
+            }
+        except Exception as error:
+            # Destroy the target VM if cloning failed
+            self._log_event(job_id, "error", f"VM clone failed: {error}")
+            try:
+                self._log_event(job_id, "info", "Destroying partially cloned VM")
+                self.service_mode.destroy_vm(target_vm_name)
+                self._log_event(job_id, "info", "Partial VM destroyed successfully")
+            except Exception as cleanup_error:
+                self._log_event(
+                    job_id,
+                    "warning",
+                    f"Failed to destroy partial VM: {cleanup_error}"
+                )
+            
+            # Re-raise the original error
+            raise
 
     def _execute_start_vm(self, payload: dict[str, Any], job_id: int | None = None) -> dict[str, Any]:
         """Execute VM start job.

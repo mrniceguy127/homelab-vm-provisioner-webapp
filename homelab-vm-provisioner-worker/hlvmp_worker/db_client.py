@@ -193,6 +193,25 @@ class DatabaseClient:
         )
         return response["event"]
 
+    def delete_job_events_for_vm(self, vm_name: str) -> int:
+        """Delete all job events for a VM.
+
+        Args:
+            vm_name: VM name
+
+        Returns:
+            Number of events deleted
+
+        Raises:
+            RuntimeError: If delete fails
+        """
+        try:
+            response = self._request("DELETE", f"/vms/{vm_name}/job-events")
+            return response.get("deletedCount", 0)
+        except Exception:
+            # Don't fail if event cleanup fails
+            return 0
+
     def acquire_resource_locks(
         self,
         job_id: int,

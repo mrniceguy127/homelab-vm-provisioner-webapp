@@ -124,6 +124,26 @@ export class JobRepository {
   }
   
   /**
+   * Delete all job events for jobs associated with a VM
+   * 
+   * @param {string} vmName - VM name
+   * @returns {Promise<number>} Number of events deleted
+   */
+  async deleteJobEventsForVm(vmName) {
+    const result = await this.pool.query(
+      `DELETE FROM job_events
+       WHERE job_id IN (
+         SELECT id FROM jobs
+         WHERE payload->>'vmName' = $1
+           OR payload->>'targetVmName' = $1
+       )`,
+      [vmName]
+    );
+    
+    return result.rowCount;
+  }
+  
+  /**
    * Claim next available job for a host
    * 
    * Uses FOR UPDATE SKIP LOCKED for safe concurrent claiming.
