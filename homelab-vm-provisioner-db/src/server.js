@@ -204,6 +204,7 @@ app.post('/vm-definitions', async (req, res, next) => {
   try {
     const {
       vm_name,
+      display_name,
       owner_user_id,
       network_group_id,
       target_host_id,
@@ -218,6 +219,7 @@ app.post('/vm-definitions', async (req, res, next) => {
 
     const vmDefinition = await repository.upsertVmDefinition({
       vm_name,
+      display_name: display_name || vm_name,
       owner_user_id,
       network_group_id,
       target_host_id,

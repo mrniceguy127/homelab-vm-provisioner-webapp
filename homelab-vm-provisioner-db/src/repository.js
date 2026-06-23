@@ -483,12 +483,13 @@ export class JobRepository {
   async upsertVmDefinition(vmDefinition) {
     const result = await this.pool.query(
       `INSERT INTO vm_definitions (
-         vm_name, owner_user_id, network_group_id, target_host_id, config,
+         vm_name, display_name, owner_user_id, network_group_id, target_host_id, config,
          ssh_public_key, setup_script
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (vm_name) DO UPDATE
-       SET owner_user_id = EXCLUDED.owner_user_id,
+       SET display_name = EXCLUDED.display_name,
+           owner_user_id = EXCLUDED.owner_user_id,
            network_group_id = EXCLUDED.network_group_id,
            target_host_id = EXCLUDED.target_host_id,
            config = EXCLUDED.config,
@@ -498,6 +499,7 @@ export class JobRepository {
        RETURNING *`,
       [
         vmDefinition.vm_name,
+        vmDefinition.display_name || vmDefinition.vm_name,
         vmDefinition.owner_user_id || null,
         vmDefinition.network_group_id || null,
         vmDefinition.target_host_id,
@@ -611,12 +613,13 @@ export class JobRepository {
 
       const vmDefinitionResult = await client.query(
         `INSERT INTO vm_definitions (
-           vm_name, owner_user_id, network_group_id, target_host_id, config,
+           vm_name, display_name, owner_user_id, network_group_id, target_host_id, config,
            ssh_public_key, setup_script
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (vm_name) DO UPDATE
-         SET owner_user_id = EXCLUDED.owner_user_id,
+         SET display_name = EXCLUDED.display_name,
+             owner_user_id = EXCLUDED.owner_user_id,
              network_group_id = EXCLUDED.network_group_id,
              target_host_id = EXCLUDED.target_host_id,
              config = EXCLUDED.config,
@@ -626,6 +629,7 @@ export class JobRepository {
          RETURNING *`,
         [
           vmDefinition.vm_name,
+          vmDefinition.display_name || vmDefinition.vm_name,
           vmDefinition.owner_user_id || null,
           vmDefinition.network_group_id || null,
           vmDefinition.target_host_id,
@@ -744,8 +748,7 @@ export class JobRepository {
   _deserializeVmDefinition(row) {
     return {
       id: row.id,
-      vm_name: row.vm_name,
-      owner_user_id: row.owner_user_id,
+      vm_name: row.vm_name,      display_name: row.display_name,      owner_user_id: row.owner_user_id,
       network_group_id: row.network_group_id,
       target_host_id: row.target_host_id,
       config: row.config,
