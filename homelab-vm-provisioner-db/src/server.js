@@ -163,6 +163,30 @@ app.post('/network-groups', async (req, res, next) => {
   }
 });
 
+app.delete('/network-groups/:id', async (req, res, next) => {
+  try {
+    const networkGroupId = req.params.id;
+    
+    // Check if network group is in use
+    const vmCount = await repository.countVmsUsingNetworkGroup(networkGroupId);
+    if (vmCount > 0) {
+      return res.status(409).json({ 
+        error: `Cannot delete network group: ${vmCount} VM(s) are using it`,
+        vmCount 
+      });
+    }
+    
+    const deletedGroup = await repository.deleteNetworkGroup(networkGroupId);
+    if (!deletedGroup) {
+      return res.status(404).json({ error: 'Network group not found' });
+    }
+    
+    res.json({ networkGroup: deletedGroup });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/vm-definitions', async (_req, res, next) => {
   try {
     const vmDefinitions = await repository.listVmDefinitions();

@@ -480,6 +480,34 @@ export class JobRepository {
     return this._deserializeNetworkGroup(result.rows[0]);
   }
 
+  /**
+   * Delete a network group
+   * 
+   * @param {string} networkGroupId - Network group ID
+   * @returns {Promise<object|null>} Deleted network group or null if not found
+   */
+  async deleteNetworkGroup(networkGroupId) {
+    const result = await this.pool.query(
+      'DELETE FROM network_groups WHERE id = $1 RETURNING *',
+      [networkGroupId]
+    );
+    return result.rows[0] ? this._deserializeNetworkGroup(result.rows[0]) : null;
+  }
+
+  /**
+   * Count VMs using a network group
+   * 
+   * @param {string} networkGroupId - Network group ID
+   * @returns {Promise<number>} Count of VMs using this network group
+   */
+  async countVmsUsingNetworkGroup(networkGroupId) {
+    const result = await this.pool.query(
+      'SELECT COUNT(*) FROM vm_definitions WHERE network_group_id = $1',
+      [networkGroupId]
+    );
+    return parseInt(result.rows[0].count, 10);
+  }
+
   async upsertVmDefinition(vmDefinition) {
     const result = await this.pool.query(
       `INSERT INTO vm_definitions (
