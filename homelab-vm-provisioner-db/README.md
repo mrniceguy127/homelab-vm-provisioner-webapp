@@ -201,6 +201,395 @@ See `src/repository.js` for the full API:
 - `acquireResourceLocks(jobId, workerId, lockKeys, ttlMs)`
 - `releaseResourceLocks(jobId, workerId)`
 
+---
+
+# API Endpoint Reference
+
+## Authentication
+
+All endpoints except `/health` require authentication via `Authorization` header:
+
+```bash
+Authorization: Bearer <DB_SERVICE_PASSWORD>
+```
+
+## Endpoints
+
+### `GET /health`
+
+Health check endpoint (no auth required).
+
+**Response 200:**
+```json
+{
+  "ok": true,
+  "database": "connected"
+}
+```
+
+### `POST /jobs`
+
+Enqueue a new job.
+
+**Request:**
+```json
+{
+  "type": "provision_vm",
+  "targetHostId": "local",
+  "targetVmId": "devbox",
+  "payload": {
+    "config": {...},
+    "sshPublicKey": "...",
+    "setupScript": "..."
+  },
+  "maxAttempts": 3
+}
+```
+
+**Response 200:**
+```json
+{
+  "id": "123",
+  "type": "provision_vm",
+  "status": "queued",
+  "targetHostId": "local",
+  "targetVmId": "devbox",
+  "payload": {...},
+  "attempts": 0,
+  "maxAttempts": 3,
+  "createdAt": "2026-06-23T10:00:00.000Z",
+  "updatedAt": "2026-06-23T10:00:00.000Z"
+}
+```
+
+### `GET /jobs`
+
+List jobs with optional filtering.
+
+**Query Parameters:**
+- `status`: Filter by status (`queued`, `running`, `succeeded`, `failed`, `cancelled`)
+- `targetHostId`: Filter by target host
+- `targetVmId`: Filter by target VM
+- `limit`: Max results (default: 100, max: 1000)
+- `offset`: Pagination offset (default: 0)
+
+**Response 200:**
+```json
+{
+  "jobs": [
+    {
+      "id": "123",
+      "type": "provision_vm",
+      "status": "queued",
+      "targetHostId": "local",
+      "targetVmId": "devbox",
+      "createdAt": "2026-06-23T10:00:00.000Z"
+    }
+  ],
+  "total": 1
+}
+```
+
+### `GET /jobs/:id`
+
+Get job details.
+
+**Response 200:**
+```json
+{
+  "id": "123",
+  "type": "provision_vm",
+  "status": "running",
+  "targetHostId": "local",
+  "targetVmId": "devbox",
+  "payload": {...},
+  "result": null,
+  "error": null,
+  "claimedBy": "worker-host-12345",
+  "claimedAt": "2026-06-23T10:00:05.000Z",
+  "startedAt": "2026-06-23T10:00:06.000Z",
+  "finishedAt": null,
+  "attempts": 1,
+  "maxAttempts": 3,
+  "createdAt": "2026-06-23T10:00:00.000Z",
+  "updatedAt": "2026-06-23T10:00:06.000Z"
+}
+```
+
+### `GET /jobs/:id/events`
+
+Get job event log.
+
+**Response 200:**
+```json
+{
+  "events": [
+    {
+      "id": "456",
+      "jobId": "123",
+      "level": "info",
+      "message": "Job claimed by worker",
+      "metadata": {"workerId": "worker-host-12345"},
+      "createdAt": "2026-06-23T10:00:05.000Z"
+    },
+    {
+      "id": "457",
+      "jobId": "123",
+      "level": "info",
+      "message": "Starting VM provisioning",
+      "metadata": null,
+      "createdAt": "2026-06-23T10:00:06.000Z"
+    }
+  ]
+}
+```
+
+### `POST /jobs/:id/events`
+
+Append event to job log.
+
+**Request:**
+```json
+{
+  "level": "info",
+  "message": "Provisioning completed",
+  "metadata": {"duration_ms": 45000}
+}
+```
+
+**Response 200:**
+```json
+{
+  "id": "458",
+  "jobId": "123",
+  "level": "info",
+  "message": "Provisioning completed",
+  "metadata": {"duration_ms": 45000},
+  "createdAt": "2026-06-23T10:00:51.000Z"
+}
+```
+
+### `POST /jobs/:id/cancel`
+
+Cancel a queued job.
+
+**Response 200:**
+```json
+{
+  "id": "123",
+  "status": "cancelled",
+  "updatedAt": "2026-06-23T10:01:00.000Z"
+}
+```
+
+**Response 400:**
+```json
+{
+  "error": "Job cannot be cancelled (status: running)"
+}
+```
+
+### `POST /jobs/claim`
+
+Claim next available job for host (worker use only).
+
+**Request:**
+```json
+{
+  "targetHostId": "local",
+  "workerId": "worker-host-12345"
+}
+```
+
+**Response 200:**
+```json
+{
+  "id": "123",
+  "type": "provision_vm",
+  "targetHostId": "local",
+  "targetVmId": "devbox",
+  "payload": {...},
+  "claimedBy": "worker-host-12345",
+  "claimedAt": "2026-06-23T10:00:05.000Z"
+}
+```
+
+**Response 204:**
+No jobs available (empty body).
+
+### `POST /jobs/:id/running`
+
+Mark job as running (worker use only).
+
+**Request:**
+```json
+{
+  "workerId": "worker-host-12345"
+}
+```
+
+**Response 200:**
+```json
+{
+  "id": "123",
+  "status": "running",
+  "startedAt": "2026-06-23T10:00:06.000Z"
+}
+```
+
+### `POST /jobs/:id/succeeded`
+
+Mark job as succeeded (worker use only).
+
+**Request:**
+```json
+{
+  "result": {
+    "vmName": "devbox",
+    "ipAddress": "192.168.100.50"
+  }
+}
+```
+
+**Response 200:**
+```json
+{
+  "id": "123",
+  "status": "succeeded",
+  "result": {...},
+  "finishedAt": "2026-06-23T10:00:51.000Z"
+}
+```
+
+### `POST /jobs/:id/failed`
+
+Mark job as failed (worker use only).
+
+**Request:**
+```json
+{
+  "error": "VM name already exists",
+  "retriable": false
+}
+```
+
+**Response 200:**
+```json
+{
+  "id": "123",
+  "status": "failed",
+  "error": "VM name already exists",
+  "finishedAt": "2026-06-23T10:00:15.000Z"
+}
+```
+
+### `POST /locks/acquire`
+
+Acquire resource locks (worker use only).
+
+**Request:**
+```json
+{
+  "jobId": "123",
+  "workerId": "worker-host-12345",
+  "lockKeys": ["vm:devbox", "network:local"],
+  "ttlMs": 300000
+}
+```
+
+**Response 200:**
+```json
+{
+  "acquired": true,
+  "locks": [
+    {
+      "lockKey": "vm:devbox",
+      "jobId": "123",
+      "workerId": "worker-host-12345",
+      "expiresAt": "2026-06-23T10:05:00.000Z"
+    },
+    {
+      "lockKey": "network:local",
+      "jobId": "123",
+      "workerId": "worker-host-12345",
+      "expiresAt": "2026-06-23T10:05:00.000Z"
+    }
+  ]
+}
+```
+
+**Response 409:**
+```json
+{
+  "acquired": false,
+  "error": "Lock already held",
+  "conflictingLocks": ["vm:devbox"]
+}
+```
+
+### `POST /locks/release`
+
+Release resource locks (worker use only).
+
+**Request:**
+```json
+{
+  "jobId": "123",
+  "workerId": "worker-host-12345"
+}
+```
+
+**Response 200:**
+```json
+{
+  "released": 2
+}
+```
+
+### `POST /locks/cleanup`
+
+Cleanup expired locks (worker use only).
+
+**Response 200:**
+```json
+{
+  "cleaned": 3
+}
+```
+
+## Error Responses
+
+### 401 Unauthorized
+Missing or invalid `Authorization` header.
+
+```json
+{
+  "error": "Unauthorized"
+}
+```
+
+### 404 Not Found
+Job not found.
+
+```json
+{
+  "error": "Job not found"
+}
+```
+
+### 500 Internal Server Error
+Database or server error.
+
+```json
+{
+  "error": "Internal server error",
+  "details": "..."
+}
+```
+
+---
+
 ## License
 
 MIT
+

@@ -171,6 +171,254 @@ tests/
   └── test_worker.py
 ```
 
+---
+
+# Job Execution Flow
+
+## Overview
+
+```
+1. Worker polls database for jobs (every WORKER_POLL_INTERVAL seconds)
+2. Database returns next queued job for HOST_ID using row-level locking
+3. Worker claims job (sets claimedBy, claimedAt)
+4. Worker acquires resource locks (vm:<name>, network:<host>, etc.)
+5. Worker marks job as running
+6. Worker executes vmctl command (provision, destroy, start, stop, etc.)
+7. Worker captures stdout/stderr and appends events to job log
+8. Worker marks job as succeeded or failed based on exit code
+9. Worker releases resource locks
+10. Worker continues polling for next job
+```
+
+## Job Type to Command Mapping
+
+| Job Type | vmctl Command | Locks Required |
+|----------|---------------|----------------|
+| `provision_vm` | `vmctl create <config>` | `vm:<name>`, `network:<host>`, `firewall:<host>` |
+| `destroy_vm` | `vmctl destroy <name>` | `vm:<name>`, `network:<host>`, `firewall:<host>` |
+| `clone_vm` | `vmctl clone <source> <config>` | `vm:<source>`, `vm:<target>`, `network:<host>`, `firewall:<host>` |
+| `start_vm` | `vmctl start <name>` | `vm:<name>` |
+| `stop_vm` | `vmctl stop <name>` | `vm:<name>` |
+| `reconcile_vm_networking` | `vmctl reconcile` | `network:<host>`, `firewall:<host>` |
+| `snapshot_create` | `vmctl snapshot-create <name>` | `vm:<name>` |
+| `snapshot_restore` | `vmctl snapshot-restore <name> <id>` | `vm:<name>`, `network:<host>`, `firewall:<host>` |
+| `snapshot_delete` | `vmctl snapshot-delete <name> <id>` | `vm:<name>` |
+
+## Resource Locking
+
+### Lock Types
+
+- **VM Lock** (`vm:<name>`): Prevents concurrent operations on the same VM
+- **Network Lock** (`network:<host>`): Prevents concurrent network config changes
+- **Firewall Lock** (`firewall:<host>`): Prevents concurrent nftables changes
+- **Host Lock** (`host:<host>`): Locks entire host for host-level operations
+
+### Lock Acquisition
+
+Locks are acquired before job execution:
+
+1. Worker requests locks from database service
+2. Database uses PostgreSQL `FOR UPDATE SKIP LOCKED` for safe concurrent claiming
+3. If locks are held by another job, acquisition fails
+4. Worker retries job later (does not mark as failed)
+5. Locks have TTL (default 5 minutes) and expire automatically
+
+### Lock Ordering
+
+To prevent deadlocks, locks are always acquired in alphabetical order:
+
+```python
+locks = sorted(['vm:devbox', 'network:local', 'firewall:local'])
+# Result: ['firewall:local', 'network:local', 'vm:devbox']
+```
+
+## Event Logging
+
+The worker appends events to the job log throughout execution:
+
+```python
+# Job claimed
+await db.append_event(job_id, 'info', 'Job claimed by worker', {'worker_id': worker_id})
+
+# Locks acquired
+await db.append_event(job_id, 'info', 'Acquired locks', {'locks': lock_keys})
+
+# Command started
+await db.append_event(job_id, 'info', 'Executing vmctl command', {'command': cmd})
+
+# Command output
+await db.append_event(job_id, 'debug', 'Command stdout', {'output': stdout})
+
+# Command completed
+await db.append_event(job_id, 'info', 'Command completed', {'exit_code': 0, 'duration_ms': 5000})
+
+# Locks released
+await db.append_event(job_id, 'info', 'Released locks', {'locks': lock_keys})
+```
+
+Event levels: `debug`, `info`, `warning`, `error`
+
+## Error Handling
+
+### Retriable Errors
+
+Jobs are retried up to `max_attempts` times for transient errors:
+- Lock acquisition failure
+- Network timeout
+- Temporary filesystem issues
+
+### Non-Retriable Errors
+
+Jobs fail immediately and are not retried:
+- Invalid config (VM name already exists, invalid network config)
+- Missing resources (source VM not found for clone)
+- Permission denied (sudo password required)
+
+### Failed Job Handling
+
+When a job fails:
+1. Worker captures error message and stderr
+2. Worker marks job as failed with error details
+3. Worker appends error event to job log
+4. Worker releases any acquired locks
+5. Job status becomes `failed` and is not retried if `attempts >= max_attempts`
+
+## Concurrency
+
+The worker supports concurrent job execution via `PROVISIONER_CONCURRENCY`:
+
+```bash
+# Run up to 3 jobs concurrently
+PROVISIONER_CONCURRENCY=3
+```
+
+### Concurrency Rules
+
+- Jobs for different VMs can run concurrently
+- Jobs requiring the same locks are serialized
+- Resource locks prevent conflicts
+- Workers poll independently and use row-level locking to claim jobs
+
+### Recommendations
+
+- Start with `PROVISIONER_CONCURRENCY=1` for stability
+- Increase cautiously based on host resources
+- Monitor CPU, memory, and disk I/O
+- Provisioning is I/O-intensive (disk copying, network setup)
+
+## Graceful Shutdown
+
+The worker handles SIGTERM and SIGINT gracefully:
+
+1. Stop polling for new jobs
+2. Wait for active jobs to complete (with timeout)
+3. Release all resource locks
+4. Exit
+
+Active jobs complete normally during shutdown. No jobs are abandoned.
+
+## Monitoring
+
+### Worker Status
+
+Check worker process:
+
+```bash
+# Is worker running?
+ps aux | grep hlvmp_worker
+
+# Check logs
+journalctl -u hlvmp-worker -f
+```
+
+### Job Status
+
+Query database service:
+
+```bash
+# All jobs for host
+curl -H "Authorization: Bearer $DB_SERVICE_PASSWORD" \
+  "http://localhost:3002/jobs?targetHostId=local"
+
+# Specific job
+curl -H "Authorization: Bearer $DB_SERVICE_PASSWORD" \
+  "http://localhost:3002/jobs/123"
+
+# Job events
+curl -H "Authorization: Bearer $DB_SERVICE_PASSWORD" \
+  "http://localhost:3002/jobs/123/events"
+```
+
+### Lock Status
+
+Check active locks:
+
+```sql
+SELECT * FROM resource_locks WHERE expires_at > NOW();
+```
+
+Cleanup expired locks:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $DB_SERVICE_PASSWORD" \
+  "http://localhost:3002/locks/cleanup"
+```
+
+## Troubleshooting
+
+### Worker Not Claiming Jobs
+
+**Problem**: Jobs stay in `queued` status
+
+**Solutions**:
+- Verify worker is running: `ps aux | grep hlvmp_worker`
+- Check `HOST_ID` matches job's `target_host_id`
+- Verify database connection: `curl http://localhost:3002/health`
+- Check worker logs for errors
+
+### Jobs Stuck in Running
+
+**Problem**: Jobs marked as `running` but never complete
+
+**Solutions**:
+- Check if worker crashed: `ps aux | grep hlvmp_worker`
+- Inspect job events: `GET /jobs/:id/events`
+- Check vmctl process: `ps aux | grep vmctl`
+- Manually cleanup stale locks: `POST /locks/cleanup`
+- Restart worker
+
+### Permission Denied Errors
+
+**Problem**: Worker fails with "permission denied" errors
+
+**Solutions**:
+- Verify worker runs with sudo access
+- Check libvirt socket permissions: `ls -la /var/run/libvirt/`
+- Add user to libvirt group: `sudo usermod -a -G libvirt $USER`
+- Verify nftables permissions (requires sudo)
+
+### Lock Acquisition Failures
+
+**Problem**: Jobs fail with "failed to acquire locks"
+
+**Solutions**:
+- Check for stuck locks: `SELECT * FROM resource_locks;`
+- Cleanup expired locks: `POST /locks/cleanup`
+- Reduce `PROVISIONER_CONCURRENCY` to avoid contention
+- Wait for conflicting jobs to complete
+
+### High CPU/Memory Usage
+
+**Problem**: Worker consumes excessive resources
+
+**Solutions**:
+- Reduce `PROVISIONER_CONCURRENCY`
+- Check for runaway vmctl processes: `ps aux | grep vmctl`
+- Monitor disk I/O during provisioning
+- Increase VM host resources
+
 ## License
 
 MIT
+

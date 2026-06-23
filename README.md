@@ -613,3 +613,608 @@ For service-specific details, see:
 
 - `homelab-vm-provisioner-api/README.md`
 - `homelab-vm-provisioner-client/README.md`
+- `homelab-vm-provisioner-cli/README.md`
+- `homelab-vm-provisioner-db/README.md`
+- `homelab-vm-provisioner-proxy/README.md`
+- `homelab-vm-provisioner-worker/README.md`
+
+---
+
+# System Architecture
+
+## Overview
+
+This is a full-stack web application for managing KVM/libvirt VMs with a React frontend, Express backend, PostgreSQL job queue, and Python provisioning engine.
+
+## Components
+
+### Frontend Layer
+
+**[homelab-vm-provisioner-client](homelab-vm-provisioner-client/)**
+- React 18 + Vite
+- Material-UI (MUI) v7 dark mode
+- VM inventory grid with status chips
+- VM create/clone/start/stop/destroy operations
+- Snapshot management (create, restore, delete)
+- Live log streaming via Server-Sent Events
+- Network group and user management
+- Port forwarding configuration
+- Playwright E2E tests
+
+**[homelab-vm-provisioner-proxy](homelab-vm-provisioner-proxy/)**
+- Express reverse proxy
+- Serves static React client from `public/`
+- Proxies API requests to backend
+- Eliminates CORS, single origin for frontend and backend
+- Minimal implementation (no tests, no build step)
+
+### Backend Layer
+
+**[homelab-vm-provisioner-api](homelab-vm-provisioner-api/)**
+- Express API server (port 3001)
+- REST endpoints for VM operations
+- Enqueues async jobs to database
+- Validates VM configs (Zod schemas)
+- Manages tenant/network-group metadata
+- Stores VM configs as YAML files
+- SSH key and setup script management
+- Integrates with Python provisioner via service-mode APIs
+- Vitest + supertest for testing
+
+**[homelab-vm-provisioner-db](homelab-vm-provisioner-db/)**
+- PostgreSQL database (jobs, events, locks, VM state)
+- Express microservice (port 3002) exposing job queue REST API
+- Internal API (not exposed to users)
+- Authentication via shared secret (DB_SERVICE_PASSWORD)
+- Migrations in `migrations/` directory
+- Job lifecycle: queued → running → succeeded/failed
+- Event logging per job for debugging
+- Resource locking to prevent concurrent operations
+
+**[homelab-vm-provisioner-worker](homelab-vm-provisioner-worker/)**
+- Python daemon that polls database for jobs
+- Claims jobs using PostgreSQL row-level locking
+- Executes `vmctl` commands (provision, destroy, clone, start, stop, etc.)
+- Acquires resource locks before execution (vm:<name>, network:<host>, firewall:<host>)
+- Appends events to job log throughout execution
+- Supports concurrent job execution (configurable)
+- Graceful shutdown (waits for active jobs)
+- 80% test coverage requirement (unittest)
+
+### Provisioning Layer
+
+**[homelab-vm-provisioner-cli](homelab-vm-provisioner-cli/)**
+- Python 3.9+ CLI for libvirt/KVM provisioning
+- Commands: create, destroy, start, stop, clone, snapshot-*, reconcile, ssh-admin
+- Cloud-init based VM configuration
+- Automatic subnet allocation for NAT networks
+- Managed network groups with nftables firewall rules
+- Port forwarding support
+- Per-VM admin SSH key generation
+- User SSH key injection
+- Stdin support for database-driven configs
+- Service-mode APIs for programmatic integration
+- 75% test coverage requirement (unittest)
+- Sphinx documentation
+
+## Data Flow
+
+### VM Provisioning (Async)
+
+```
+1. User creates VM via client UI
+2. Client sends POST /api/configs to API
+3. API validates config and enqueues job to database
+4. Worker polls database and claims job
+5. Worker acquires resource locks
+6. Worker executes vmctl create <config>
+7. CLI provisions VM via libvirt
+8. CLI reconciles nftables firewall rules
+9. Worker marks job as succeeded
+10. Client polls job status and refreshes VM list
+```
+
+### VM Status Refresh (Sync)
+
+```
+1. Client sends GET /api/vms to API
+2. API reads saved configs from filesystem
+3. API calls CLI service-mode API for runtime state
+4. CLI queries libvirt for VM status, IP, network info
+5. API merges config + runtime state
+6. API returns JSON to client
+```
+
+### Network Reconciliation
+
+```
+1. API or CLI detects network changes
+2. Reconciler computes desired nftables rules
+3. Reconciler validates changes (prevent routing loops, orphans)
+4. Reconciler generates nftables ruleset
+5. Reconciler applies rules via sudo nft -f
+6. Reconciler verifies rules loaded correctly
+7. On failure, rolls back to previous ruleset
+```
+
+## Network Architecture
+
+### Tenant Isolation
+
+- One user record per tenant
+- One network group per tenant (mapped to libvirt network)
+- One /28 subnet per network group (default, configurable)
+- Subnets allocated from global pool (10.80.0.0/16 default)
+- VMs in same group can communicate (configurable per-VM)
+- Cross-group traffic denied by default
+- Internet access via NAT (configurable per-VM)
+- Private LAN access denied by default (admin-only override)
+
+### Firewall Management
+
+Application-owned nftables tables:
+- `hvp_nat`: NAT rules for VM internet access and port forwarding
+- `hvp_filter`: Filter rules for VM-to-VM, VM-to-host, VM-to-internet traffic
+- `hvp_bridge_filter`: Bridge filter rules for same-subnet isolation
+
+Rules are reconciled on:
+- VM creation/destruction
+- Network config changes
+- Port forwarding updates
+- Policy toggle changes (same-group traffic, internet access, etc.)
+
+See [API docs/vm-networking-nftables.md](homelab-vm-provisioner-api/docs/vm-networking-nftables.md) for full details.
+
+## Database Schema
+
+### Jobs Table
+- `id`: Job primary key
+- `type`: Job type (provision_vm, destroy_vm, clone_vm, etc.)
+- `status`: queued, running, succeeded, failed, cancelled
+- `target_host_id`: Host where job should run
+- `target_vm_id`: Target VM name (nullable)
+- `payload`: JSON job parameters
+- `result`: JSON job result (on success)
+- `error`: Error message (on failure)
+- `claimed_by`: Worker ID that claimed job
+- `attempts`: Execution attempt counter
+- `max_attempts`: Retry limit (default 3)
+- Timestamps: created_at, claimed_at, started_at, finished_at, updated_at
+
+### Job Events Table
+- `id`: Event primary key
+- `job_id`: Foreign key to jobs
+- `level`: debug, info, warning, error
+- `message`: Event message
+- `metadata`: JSON additional context
+- `created_at`: Event timestamp
+
+### Resource Locks Table
+- `lock_key`: Lock identifier (vm:name, network:host, etc.)
+- `job_id`: Job holding the lock
+- `worker_id`: Worker holding the lock
+- `expires_at`: Lock expiration timestamp
+
+See [database migrations](homelab-vm-provisioner-db/migrations/) for full schema.
+
+## Configuration
+
+### Hierarchical .env System
+
+The project uses hierarchical `.env` configuration:
+
+```
+workspace/.env                          # Workspace defaults
+├── homelab-vm-provisioner-api/.env    # API overrides
+│   └── homelab-vm-provisioner-cli/.env # Provisioner overrides
+├── homelab-vm-provisioner-client/.env  # Client overrides
+├── homelab-vm-provisioner-proxy/.env   # Proxy overrides
+├── homelab-vm-provisioner-db/.env      # Database overrides
+└── homelab-vm-provisioner-worker/.env  # Worker overrides
+```
+
+**How it works:**
+1. Parent script sources workspace `.env`
+2. Parent calls child script (child inherits environment)
+3. Child sources only its own `.env` (overrides inherited values)
+4. Variables not in child `.env` remain from parent
+
+**Example:**
+- Workspace sets `API_PORT=3001`
+- API component overrides with `API_PORT=4001`
+- Client inherits `API_PORT=3001` (no override)
+
+### Key Environment Variables
+
+| Variable | Default | Component | Description |
+|----------|---------|-----------|-------------|
+| `PROXY_PORT` | 3000 | Proxy | Proxy server port |
+| `API_PORT` | 3001 | API | API server port |
+| `DB_SERVICE_PORT` | 3002 | Database | Database microservice port |
+| `DB_SERVICE_URL` | http://localhost:3002 | API, Worker | Database microservice URL |
+| `DB_SERVICE_PASSWORD` | changeme_db_secret | API, Worker, DB | Shared secret for DB authentication |
+| `HOST_ID` | (required) | API, Worker | Host identifier for job targeting |
+| `PROVISIONER_CLI_PATH` | ../homelab-vm-provisioner-cli | API, Worker | Path to CLI package |
+| `PROVISIONER_CONCURRENCY` | 1 | Worker | Max concurrent jobs |
+| `WORKER_POLL_INTERVAL` | 5.0 | Worker | Poll interval in seconds |
+| `HLVMP_NETWORK_POOL_CIDR` | 10.80.0.0/16 | API | Global network pool |
+| `HLVMP_NETWORK_GROUP_PREFIX_LENGTH` | 28 | API | Network group subnet size |
+| `ENABLE_CLIENT` | true | Workspace | Enable client/proxy |
+| `ENABLE_API` | true | Workspace | Enable API |
+| `ENABLE_DB_SERVICE` | true | Workspace | Enable DB microservice |
+| `ENABLE_DB` | true | Workspace | Enable PostgreSQL |
+| `ENABLE_WORKER` | true | Workspace | Enable worker daemon |
+
+See `.env.example` files in each component for complete lists.
+
+## Deployment Modes
+
+### Full Stack (Default)
+
+All components enabled:
+
+```bash
+./setup
+./build
+./start
+```
+
+Services:
+- PostgreSQL (port 5432)
+- Database microservice (port 3002)
+- API (port 3001)
+- Worker daemon (polls every 5s)
+- Proxy (port 3000)
+
+Access: http://localhost:3000
+
+### Docker Mode
+
+Database, API, and proxy in Docker; worker on host:
+
+```bash
+./setup --docker
+./start --docker
+```
+
+Containers:
+- `hlvmp-db`: PostgreSQL + microservice
+- `hlvmp-api`: Express API
+- `hlvmp-proxy`: Reverse proxy
+
+Worker runs on host (requires libvirt access).
+
+### Client Only
+
+Frontend connecting to remote API:
+
+```bash
+ENABLE_CLIENT=true
+ENABLE_API=false
+ENABLE_DB_SERVICE=false
+ENABLE_DB=false
+PROXY_API_HOST=http://remote-api:3001
+
+./setup
+./build
+./start
+```
+
+### API Only
+
+Backend without frontend:
+
+```bash
+ENABLE_CLIENT=false
+ENABLE_API=true
+ENABLE_DB_SERVICE=true
+ENABLE_DB=true
+
+./setup
+./build
+./start
+```
+
+## Security Considerations
+
+### Current State
+
+**No authentication/authorization implemented yet.** The system assumes a trusted network environment.
+
+### What Needs Protection
+
+1. **API Endpoints**: All VM operations are unauthenticated
+2. **Database Service**: Protected only by shared secret (DB_SERVICE_PASSWORD)
+3. **Worker**: No authentication (assumes trusted environment)
+4. **SSH Keys**: Stored as plain text files
+5. **Setup Scripts**: Executed without validation
+
+### Recommendations for Production
+
+1. Add JWT-based authentication to API
+2. Implement user sessions and RBAC
+3. Encrypt sensitive data at rest
+4. Add TLS/HTTPS support
+5. Implement rate limiting
+6. Add audit logging
+7. Validate setup scripts before execution
+8. Use secrets management (Vault, etc.)
+9. Network isolation (firewall rules, VLANs)
+10. Regular security audits
+
+## Performance
+
+### Resource Requirements
+
+**Minimum:**
+- CPU: 4 cores
+- RAM: 8 GB
+- Disk: 50 GB SSD
+- Network: 1 Gbps
+
+**Recommended:**
+- CPU: 8+ cores
+- RAM: 16+ GB
+- Disk: 100+ GB NVMe SSD
+- Network: 10 Gbps
+
+### Scaling Considerations
+
+**Worker Concurrency:**
+- Start with `PROVISIONER_CONCURRENCY=1`
+- Increase cautiously based on host resources
+- VM provisioning is I/O-intensive (disk copying, image downloads)
+
+**Database:**
+- PostgreSQL can handle hundreds of concurrent workers
+- Use connection pooling for high-load scenarios
+- Monitor lock contention in `resource_locks` table
+
+**Network:**
+- Each network group uses one /28 subnet (14 usable IPs)
+- Default pool (10.80.0.0/16) supports 4096 network groups
+- Adjust `HLVMP_NETWORK_POOL_CIDR` and `HLVMP_NETWORK_GROUP_PREFIX_LENGTH` for larger deployments
+
+## Limitations
+
+1. **No multi-host support**: Worker only processes jobs for single `HOST_ID`
+2. **No VM live migration**: VMs cannot be moved between hosts
+3. **No automatic failover**: Worker crash requires manual intervention
+4. **No stale job recovery**: Stuck jobs require manual cleanup
+5. **Limited network modes**: NAT and bridge only (no VLAN, SR-IOV, etc.)
+6. **No GPU passthrough**: Only CPU/RAM/disk/network virtualization
+7. **No nested virtualization**: VMs cannot run VMs
+8. **No HA/clustering**: Single point of failure
+9. **Local storage only**: No shared storage (NFS, Ceph, etc.)
+10. **Docker constraints**: Worker cannot run in container (needs libvirt access)
+
+## Troubleshooting
+
+### API won't start
+
+**Check:**
+- Python provisioner venv exists: `ls homelab-vm-provisioner-cli/.venv`
+- Node.js dependencies installed: `ls homelab-vm-provisioner-api/node_modules`
+- Port 3001 is available: `lsof -i :3001`
+- Libvirt is running: `sudo systemctl status libvirtd`
+
+### Worker not claiming jobs
+
+**Check:**
+- Worker is running: `ps aux | grep hlvmp_worker`
+- `HOST_ID` matches job `target_host_id`
+- Database connection: `curl http://localhost:3002/health`
+- Worker logs: `journalctl -u hlvmp-worker -f`
+
+### VM provisioning fails
+
+**Check:**
+- Libvirt is running: `sudo systemctl status libvirtd`
+- QEMU/KVM installed: `which qemu-system-x86_64`
+- libvirt permissions: `sudo usermod -a -G libvirt $USER`
+- nftables loaded: `sudo nft list tables`
+- Disk space: `df -h /var/lib/libvirt/images`
+
+### Frontend shows blank page
+
+**Check:**
+- Static files exist: `ls homelab-vm-provisioner-proxy/public/index.html`
+- Proxy is running: `curl http://localhost:3000/proxy-health`
+- API is reachable: `curl http://localhost:3001/health`
+- Browser console for JavaScript errors
+
+### Logs not streaming
+
+**Check:**
+- VM log file exists: `ls /var/log/libvirt/qemu/<vm>.log`
+- Log file permissions: `sudo chmod 644 /var/log/libvirt/qemu/<vm>.log`
+- API has read access: `sudo usermod -a -G libvirt $USER`
+
+---
+
+# System Architecture Diagram
+
+```mermaid
+flowchart TB
+    %% User Layer
+    User[👤 User / Browser]
+    
+    %% Frontend Layer
+    subgraph Frontend["🌐 Frontend Layer"]
+        direction TB
+        Proxy["Proxy<br/>Express<br/>:3000"]
+        Client["React Client<br/>Material-UI<br/>Static Files"]
+    end
+    
+    %% Backend Layer
+    subgraph Backend["⚙️ Backend Layer"]
+        direction TB
+        API["API Server<br/>Express<br/>:3001"]
+        DB_Service["DB Microservice<br/>Express<br/>:3002"]
+    end
+    
+    %% Database Layer
+    subgraph Database["💾 Database Layer"]
+        direction TB
+        PostgreSQL[("PostgreSQL<br/>Jobs Queue<br/>Events Log<br/>Resource Locks")]
+    end
+    
+    %% Worker Layer
+    subgraph Worker_Layer["🔧 Worker Layer"]
+        direction TB
+        Worker["Worker Daemon<br/>Python<br/>Polls & Claims Jobs"]
+        CLI["Provisioner CLI<br/>vmctl<br/>Python Package"]
+    end
+    
+    %% Infrastructure Layer
+    subgraph Infrastructure["🖥️ Infrastructure Layer"]
+        direction TB
+        Libvirt["libvirt / virsh<br/>VM Management"]
+        QEMU["QEMU/KVM<br/>Hypervisor"]
+        Nftables["nftables<br/>Firewall Rules"]
+        Storage[("VM Storage<br/>qcow2 Images")]
+    end
+    
+    %% VM Layer
+    subgraph VM_Layer["🖧 Virtual Machines"]
+        direction TB
+        VMs["Running VMs"]
+        Networks["Network Groups<br/>NAT / Bridge"]
+    end
+    
+    %% User to Frontend
+    User -->|HTTP :3000| Proxy
+    
+    %% Frontend connections
+    Proxy -->|Serves| Client
+    Proxy -->|Proxies| API
+    
+    %% Backend connections
+    API -->|Enqueues Jobs| DB_Service
+    API -.->|Wakes via Socket| Worker
+    DB_Service -->|Queries| PostgreSQL
+    
+    %% Worker connections
+    Worker -->|Claims Jobs| DB_Service
+    Worker -->|Executes| CLI
+    
+    %% Provisioning connections
+    CLI -->|Manages VMs| Libvirt
+    CLI -->|Configures| Nftables
+    
+    %% Infrastructure connections
+    Libvirt -->|Controls| QEMU
+    Libvirt -->|Manages| Storage
+    QEMU -->|Runs| VMs
+    
+    %% VM connections
+    VMs -->|Connected to| Networks
+    Networks -->|NAT/Bridge| Host_Network[🌍 Host Network]
+    
+    %% Styling
+    classDef frontend fill:#4A90E2,stroke:#2E5C8A,stroke-width:3px,color:#fff
+    classDef backend fill:#50C878,stroke:#2E7D4E,stroke-width:3px,color:#fff
+    classDef database fill:#F39C12,stroke:#B87A0A,stroke-width:3px,color:#fff
+    classDef worker fill:#9B59B6,stroke:#6C3483,stroke-width:3px,color:#fff
+    classDef infra fill:#E74C3C,stroke:#A93226,stroke-width:3px,color:#fff
+    classDef vm fill:#16A085,stroke:#0E6655,stroke-width:3px,color:#fff
+    
+    class Proxy,Client frontend
+    class API,DB_Service backend
+    class PostgreSQL database
+    class Worker,CLI worker
+    class Libvirt,QEMU,Nftables,Storage infra
+    class VMs,Networks vm
+```
+
+## Diagram Legend
+
+### 🌐 Frontend Layer (Blue)
+- **Proxy**: Reverse proxy serving static files and proxying API requests (port 3000)
+- **React Client**: Material-UI dark mode SPA for VM management
+
+### ⚙️ Backend Layer (Green)
+- **API Server**: Express REST API for VM operations (port 3001)
+- **DB Microservice**: Internal API for job queue operations (port 3002)
+
+### 💾 Database Layer (Orange)
+- **PostgreSQL**: Job queue, event log, resource locks, VM state
+
+### 🔧 Worker Layer (Purple)
+- **Worker Daemon**: Polls database, claims jobs, executes vmctl commands
+- **Provisioner CLI**: Python package with vmctl commands for VM lifecycle
+
+### 🖥️ Infrastructure Layer (Red)
+- **libvirt/virsh**: VM lifecycle and network management
+- **QEMU/KVM**: Hypervisor for running VMs
+- **nftables**: Firewall rules for VM networking and isolation
+- **VM Storage**: qcow2 disk images on host filesystem
+
+### 🖧 Virtual Machines Layer (Teal)
+- **Running VMs**: Active virtual machines
+- **Network Groups**: Isolated subnets for tenant VMs (NAT/Bridge modes)
+
+## Key Connections
+
+### Primary Async Flow (Solid Lines)
+1. **User → Proxy → API**: User requests via web UI
+2. **API → DB Service → PostgreSQL**: API enqueues jobs to database
+3. **API ⤍ Worker**: API wakes worker via Unix socket (optional)
+4. **Worker → DB Service**: Worker polls and claims jobs
+5. **Worker → CLI → libvirt**: Worker executes vmctl commands
+
+### Infrastructure (Solid Lines)
+- **CLI → libvirt**: Manages VMs and networks
+- **CLI → nftables**: Configures firewall rules
+- **libvirt → QEMU**: Controls hypervisor
+- **QEMU → VMs**: Runs virtual machines
+
+## Data Flow Patterns
+
+### Async VM Provisioning (Primary Flow)
+```
+User → Proxy → API → DB Service → PostgreSQL
+                ↓                      ↓
+            Wake Worker          Worker polls & claims job
+                                      ↓
+                                Worker → vmctl → libvirt → QEMU
+```
+
+1. User creates VM via web UI
+2. API validates config and enqueues job to database
+3. API wakes worker via Unix socket (optional, reduces latency)
+4. Worker polls database and claims job using row-level locking
+5. Worker acquires resource locks (vm:<name>, network:<host>, etc.)
+6. Worker executes vmctl command
+7. CLI provisions VM via libvirt and configures nftables
+8. Worker marks job as succeeded/failed with event log
+
+### VM Status Refresh (Sync Query)
+```
+User → Proxy → API → Read VM configs from filesystem
+                  ↓
+               Query libvirt for runtime state
+                  ↓
+               Merge config + runtime → Return to user
+```
+
+### Live Log Streaming (Server-Sent Events)
+```
+User ← Proxy ← API ← tail -f /var/log/libvirt/qemu/<vm>.log
+  (SSE connection with keep-alive)
+```
+
+### Network Reconciliation
+```
+API or CLI detects network changes
+       ↓
+Reconciler computes desired nftables rules
+       ↓
+Validate changes (prevent loops, orphans)
+       ↓
+Generate and apply nftables ruleset (hvp_nat, hvp_filter, hvp_bridge_filter)
+       ↓
+Verify rules loaded correctly (rollback on failure)
+```
+
+---
