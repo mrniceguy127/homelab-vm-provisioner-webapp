@@ -16,7 +16,7 @@ class WorkerConfig:
         self,
         database_url: str,
         host_id: str,
-        api_host: str,
+        proxy_api_host: str,
         api_port: int,
         worker_id: Optional[str] = None,
         concurrency: int = 1,
@@ -30,7 +30,7 @@ class WorkerConfig:
         Args:
             database_url: PostgreSQL connection URL (deprecated, use db_service_url)
             host_id: Host identifier for job claiming
-            api_host: API host (required, e.g. localhost)
+            proxy_api_host: API host with scheme (required, e.g. http://localhost)
             api_port: API port (required, e.g. 3001)
             worker_id: Unique worker identifier (auto-generated if None)
             concurrency: Maximum number of concurrent jobs (default: 1)
@@ -41,9 +41,9 @@ class WorkerConfig:
         """
         self.database_url = database_url
         self.host_id = host_id
-        self.api_host = api_host
+        self.proxy_api_host = proxy_api_host
         self.api_port = api_port
-        self.api_url = f"http://{api_host}:{api_port}"
+        self.api_url = f"{proxy_api_host}:{api_port}"
         self.worker_id = worker_id or self._generate_worker_id()
         self.concurrency = max(1, concurrency)
         self.state_refresh_interval = max(5.0, state_refresh_interval)
@@ -95,7 +95,7 @@ class WorkerConfig:
             DB_SERVICE_URL: Database microservice URL (preferred)
             DB_SERVICE_PASSWORD: Database microservice password
             HOST_ID: Host identifier for job claiming
-            API_HOST: API host (required, e.g. localhost)
+            PROXY_API_HOST: API host with scheme (required, e.g. http://localhost)
             API_PORT: API port (required, e.g. 3001)
             WORKER_QUEUE_HOST: RabbitMQ host (required)
             WORKER_ID: Optional worker identifier (auto-generated if not set)
@@ -122,11 +122,11 @@ class WorkerConfig:
                 "Either DATABASE_URL or DB_SERVICE_URL environment variable is required"
             )
 
-        api_host = os.environ.get("API_HOST", "")
+        proxy_api_host = os.environ.get("PROXY_API_HOST", "")
         api_port_str = os.environ.get("API_PORT", "")
 
-        if not api_host:
-            raise ValueError("API_HOST environment variable is required")
+        if not proxy_api_host:
+            raise ValueError("PROXY_API_HOST environment variable is required")
         if not api_port_str:
             raise ValueError("API_PORT environment variable is required")
 
@@ -151,7 +151,7 @@ class WorkerConfig:
         return cls(
             database_url=database_url,
             host_id=host_id,
-            api_host=api_host,
+            proxy_api_host=proxy_api_host,
             api_port=api_port,
             worker_id=worker_id,
             concurrency=concurrency,
@@ -167,6 +167,6 @@ class WorkerConfig:
             f"WorkerConfig(host_id={self.host_id!r}, "
             f"worker_id={self.worker_id!r}, concurrency={self.concurrency}, "
             f"state_refresh_interval={self.state_refresh_interval}, "
-            f"api_host={self.api_host!r}, api_port={self.api_port}, "
+            f"proxy_api_host={self.proxy_api_host!r}, api_port={self.api_port}, "
             f"provisioner_cli_path={self.provisioner_cli_path!r})"
         )
