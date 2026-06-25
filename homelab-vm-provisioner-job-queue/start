@@ -99,10 +99,12 @@ if [[ "$DOCKER_MODE" == "true" ]]; then
         log "Creating and starting RabbitMQ container"
         docker run -d \
             --name "$CONTAINER_NAME" \
-            -p "$QUEUE_PORT:5672" \
-            -p "$QUEUE_MGMT_PORT:15672" \
+            -p "$QUEUE_PORT:$QUEUE_PORT" \
+            -p "$QUEUE_MGMT_PORT:$QUEUE_MGMT_PORT" \
             -e RABBITMQ_DEFAULT_USER="$QUEUE_ADMIN_USER" \
             -e RABBITMQ_DEFAULT_PASS="$QUEUE_ADMIN_PASSWORD" \
+            -e RABBITMQ_NODE_PORT="$QUEUE_PORT" \
+            -e RABBITMQ_MANAGEMENT_TCP_PORT="$QUEUE_MGMT_PORT" \
             -v hlvmp-rabbitmq-data:/var/lib/rabbitmq \
             rabbitmq:3-management
     fi
