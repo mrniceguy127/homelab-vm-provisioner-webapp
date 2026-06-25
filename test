@@ -31,6 +31,7 @@ RUN_CLI=false
 RUN_WORKER=false
 RUN_API=false
 RUN_CLIENT=false
+RUN_QUEUE=false
 USE_ENV_CONFIG=false
 
 # Parse arguments
@@ -45,6 +46,7 @@ show_help() {
     echo "  --worker    Run Python Worker tests only"
     echo "  --api       Run Node.js API tests only"
     echo "  --client    Run React Client tests only"
+    echo "  --queue     Run Queue tests only"
     echo "  --env       Test only components enabled in .env (falls back to all if .env missing)"
     echo "  -h, --help  Show this help message"
     echo ""
@@ -99,12 +101,13 @@ load_env_config() {
     fi
     
     # If nothing enabled, default to all
-    if ! $RUN_CLI && ! $RUN_WORKER && ! $RUN_API && ! $RUN_CLIENT; then
+    if ! $RUN_CLI && ! $RUN_WORKER && ! $RUN_API && ! $RUN_CLIENT && ! $RUN_QUEUE; then
         echo -e "${YELLOW}Warning: No components enabled in .env, testing all${RESET}"
         RUN_CLI=true
         RUN_WORKER=true
         RUN_API=true
         RUN_CLIENT=true
+        RUN_QUEUE=true
     fi
 }
 
@@ -133,6 +136,10 @@ while [[ $# -gt 0 ]]; do
             RUN_CLIENT=true
             shift
             ;;
+        --queue)
+            RUN_QUEUE=true
+            shift
+            ;;
         --env)
             USE_ENV_CONFIG=true
             shift
@@ -152,11 +159,12 @@ done
 if $USE_ENV_CONFIG; then
     load_env_config
 # If no flags specified, run all tests
-elif ! $RUN_CLI && ! $RUN_WORKER && ! $RUN_API && ! $RUN_CLIENT; then
+elif ! $RUN_CLI && ! $RUN_WORKER && ! $RUN_API && ! $RUN_CLIENT && ! $RUN_QUEUE; then
     RUN_CLI=true
     RUN_WORKER=true
     RUN_API=true
     RUN_CLIENT=true
+    RUN_QUEUE=true
 fi
 
 # Progress spinner
@@ -456,6 +464,48 @@ test_react_client() {
     rm -f "$CLIENT_OUTPUT" "$CLIENT_LINT_OUTPUT"
 }
 
+test_queue() {
+    print_header "Job Queue (homelab-vm-provisioner-job-queue)"
+
+    QUEUE_DIR="$WORKSPACE_ROOT/homelab-vm-provisioner-job-queue"
+    cd "$QUEUE_DIR" || exit 1
+
+    # Check if queue test script exists
+    if [[ ! -x "$QUEUE_DIR/test" ]]; then
+        echo -e "${YELLOW}Warning: Queue test script not found or not executable. Skipping queue tests.${RESET}"
+        QUEUE_STATUS="SKIP"
+        QUEUE_LINT="Test script not found"
+        print_result "Job Queue" "$QUEUE_STATUS" "$QUEUE_LINT" "" ""
+        return
+    fi
+
+    # Run queue tests
+    QUEUE_OUTPUT=$(mktemp)
+    start_spinner "Running queue tests"
+    if "$QUEUE_DIR/test" > "$QUEUE_OUTPUT" 2>&1; then
+        stop_spinner
+        QUEUE_STATUS="PASS"
+        QUEUE_LINT="N/A"
+        # Extract test results
+        QUEUE_TESTS=$(grep -c "^✓" "$QUEUE_OUTPUT" || echo "all")
+        if [[ "$QUEUE_TESTS" == "all" ]]; then
+            QUEUE_TESTS="all checks passed"
+        else
+            QUEUE_TESTS="$QUEUE_TESTS checks passed"
+        fi
+        QUEUE_COVERAGE="N/A"
+    else
+        stop_spinner
+        QUEUE_STATUS="FAIL"
+        QUEUE_LINT="N/A"
+        QUEUE_TESTS="checks failed"
+        QUEUE_COVERAGE="N/A"
+    fi
+
+    print_result "Job Queue" "$QUEUE_STATUS" "$QUEUE_LINT" "$QUEUE_TESTS" "$QUEUE_COVERAGE"
+    rm -f "$QUEUE_OUTPUT"
+}
+
 # ============================================
 # Run Selected Tests
 # ============================================
@@ -474,6 +524,10 @@ fi
 
 if $RUN_CLIENT; then
     test_react_client
+fi
+
+if $RUN_QUEUE; then
+    test_queue
 fi
 
 # ============================================

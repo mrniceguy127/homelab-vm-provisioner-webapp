@@ -16,14 +16,15 @@ class TestWorkerConfig(unittest.TestCase):
             config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
+                api_internal_url="http://localhost:3001/internal",
                 provisioner_cli_path="/usr/bin/vmctl",
             )
 
         self.assertEqual(config.database_url, "postgresql://localhost/test")
         self.assertEqual(config.host_id, "test-host")
+        self.assertEqual(config.api_internal_url, "http://localhost:3001/internal")
         self.assertIsNotNone(config.worker_id)
         self.assertEqual(config.concurrency, 1)
-        self.assertEqual(config.poll_interval, 5.0)
         self.assertIn("/usr/bin", config.provisioner_cli_path)
 
     def test_init_with_custom_values(self):
@@ -32,15 +33,14 @@ class TestWorkerConfig(unittest.TestCase):
             config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
+                api_internal_url="http://localhost:3001/internal",
                 worker_id="custom-worker",
                 concurrency=3,
-                poll_interval=10.0,
                 provisioner_cli_path="/custom/path",
             )
 
         self.assertEqual(config.worker_id, "custom-worker")
         self.assertEqual(config.concurrency, 3)
-        self.assertEqual(config.poll_interval, 10.0)
         self.assertIn("custom", config.provisioner_cli_path)
 
     def test_concurrency_minimum(self):
@@ -49,31 +49,22 @@ class TestWorkerConfig(unittest.TestCase):
             config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
+                api_internal_url="http://localhost:3001/internal",
                 concurrency=0,
                 provisioner_cli_path="/usr/bin/vmctl",
             )
 
         self.assertEqual(config.concurrency, 1)
 
-    def test_poll_interval_minimum(self):
-        with patch("hlvmp_worker.config.Path.exists", return_value=True):
-            config = WorkerConfig(
-                database_url="postgresql://localhost/test",
-                host_id="test-host",
-                poll_interval=0.5,
-                provisioner_cli_path="/usr/bin/vmctl",
-        )
-
-        self.assertEqual(config.poll_interval, 1.0)
-
     @patch.dict(
         os.environ,
         {
             "DATABASE_URL": "postgresql://localhost/test",
             "HOST_ID": "env-host",
+            "API_INTERNAL_URL": "http://localhost:3001/internal",
+            "WORKER_QUEUE_HOST": "localhost",
             "WORKER_ID": "env-worker",
             "PROVISIONER_CONCURRENCY": "2",
-            "WORKER_POLL_INTERVAL": "7.5",
             "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
         },
     )
@@ -84,9 +75,9 @@ class TestWorkerConfig(unittest.TestCase):
 
         self.assertEqual(config.database_url, "postgresql://localhost/test")
         self.assertEqual(config.host_id, "env-host")
+        self.assertEqual(config.api_internal_url, "http://localhost:3001/internal")
         self.assertEqual(config.worker_id, "env-worker")
         self.assertEqual(config.concurrency, 2)
-        self.assertEqual(config.poll_interval, 7.5)
 
     @patch.dict(
         os.environ,
@@ -94,6 +85,8 @@ class TestWorkerConfig(unittest.TestCase):
             "DB_SERVICE_URL": "http://localhost:3002",
             "DB_SERVICE_PASSWORD": "secret",
             "HOST_ID": "env-host",
+            "API_INTERNAL_URL": "http://localhost:3001/internal",
+            "WORKER_QUEUE_HOST": "localhost",
             "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
         },
     )
@@ -123,12 +116,44 @@ class TestWorkerConfig(unittest.TestCase):
         self.assertIn("DATABASE_URL", str(context.exception))
         self.assertIn("DB_SERVICE_URL", str(context.exception))
 
+    @patch.dict(
+        os.environ,
+        {
+            "HOST_ID": "test-host",
+            "DB_SERVICE_URL": "http://localhost:3002",
+        },
+        clear=True,
+    )
+    def test_from_env_missing_api_internal_url(self):
+        """Test that from_env raises ValueError when API_INTERNAL_URL is missing."""
+        with self.assertRaises(ValueError) as context:
+            WorkerConfig.from_env()
+
+        self.assertIn("API_INTERNAL_URL", str(context.exception))
+
+    @patch.dict(
+        os.environ,
+        {
+            "HOST_ID": "test-host",
+            "DB_SERVICE_URL": "http://localhost:3002",
+            "API_INTERNAL_URL": "http://localhost:3001/internal",
+        },
+        clear=True,
+    )
+    def test_from_env_missing_worker_queue_host(self):
+        """Test that from_env raises ValueError when WORKER_QUEUE_HOST is missing."""
+        with self.assertRaises(ValueError) as context:
+            WorkerConfig.from_env()
+
+        self.assertIn("WORKER_QUEUE_HOST", str(context.exception))
+
     def test_init_with_explicit_provisioner_path(self):
         """Test initialization with explicit provisioner CLI path."""
         with patch("hlvmp_worker.config.Path.exists", return_value=True):
             config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
+                api_internal_url="http://localhost:3001/internal",
                 worker_id="test-worker",
                 provisioner_cli_path="/test/path",
             )
@@ -138,9 +163,8 @@ class TestWorkerConfig(unittest.TestCase):
         self.assertIn("test-host", repr_str)
         self.assertIn("test-worker", repr_str)
         self.assertIn("concurrency=1", repr_str)
+        self.assertIn("api_internal_url", repr_str)
         self.assertIn("provisioner_cli_path", repr_str)
-        self.assertIn("test-worker", repr_str)
-        self.assertIn("concurrency=1", repr_str)
 
 
 if __name__ == "__main__":

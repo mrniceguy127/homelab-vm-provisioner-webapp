@@ -305,6 +305,70 @@ export class JobRepository {
   }
   
   /**
+   * Update job status with additional fields
+   * 
+   * Generic method for updating job status and optional fields.
+   * Used by API internal worker endpoints for RabbitMQ-based job updates.
+   * 
+   * @param {number} jobId - Job ID
+   * @param {string} status - New status
+   * @param {object} updates - Additional fields to update
+   * @param {string} [updates.error] - Error message
+   * @param {object} [updates.result] - Job result
+   * @param {string} [updates.claimed_by] - Worker ID
+   * @param {Date} [updates.claimed_at] - Claim timestamp
+   * @param {Date} [updates.started_at] - Start timestamp
+   * @param {Date} [updates.finished_at] - Finish timestamp
+   * @param {Date} [updates.last_heartbeat_at] - Last heartbeat timestamp
+   * @param {string} [updates.queue_message_id] - RabbitMQ message ID
+   * @param {object} [updates.cleanup_context] - Cleanup metadata
+   * @param {number} [updates.attempts] - Attempt count
+   * @returns {Promise<object>} Updated job
+   */
+  async updateJobStatus(jobId, status, updates = {}) {
+    const fields = ['status = $2'];
+    const params = [jobId, status];
+    let paramIndex = 3;
+    
+    // Build dynamic UPDATE statement
+    const allowedFields = {
+      error: 'error',
+      result: 'result',
+      claimed_by: 'claimed_by',
+      claimed_at: 'claimed_at',
+      started_at: 'started_at',
+      finished_at: 'finished_at',
+      last_heartbeat_at: 'last_heartbeat_at',
+      queue_message_id: 'queue_message_id',
+      cleanup_context: 'cleanup_context',
+      attempts: 'attempts'
+    };
+    
+    for (const [key, column] of Object.entries(allowedFields)) {
+      if (updates.hasOwnProperty(key)) {
+        fields.push(`${column} = $${paramIndex++}`);
+        let value = updates[key];
+        
+        // Serialize JSON fields
+        if (key === 'result' || key === 'cleanup_context') {
+          value = value ? JSON.stringify(value) : null;
+        }
+        
+        params.push(value);
+      }
+    }
+    
+    const query = `UPDATE jobs SET ${fields.join(', ')} WHERE id = $1 RETURNING *`;
+    const result = await this.pool.query(query, params);
+    
+    if (result.rows.length === 0) {
+      throw new Error(`Job ${jobId} not found`);
+    }
+    
+    return this._deserializeJob(result.rows[0]);
+  }
+  
+  /**
    * Cancel a queued job
    * 
    * @param {number} jobId - Job ID

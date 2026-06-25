@@ -19,12 +19,12 @@ class TestWorkerDaemon(unittest.TestCase):
             self.config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
+                api_internal_url="http://localhost:3001/internal",
                 worker_id="test-worker",
                 concurrency=2,
-                poll_interval=1.0,
                 db_service_url="http://localhost:3002",
                 db_service_password="test-password",
-                provisioner_cli_path="/usr/bin/vmctl",  # Required for standalone microservice
+                provisioner_cli_path="/usr/bin/vmctl",
             )
         self.db_client = Mock(spec=DatabaseClient)
         self.executor = Mock(spec=JobExecutor)
@@ -39,10 +39,13 @@ class TestWorkerDaemon(unittest.TestCase):
         self.assertFalse(self.worker.shutdown_requested)
 
     def test_handle_signal(self):
-        """Test signal handler sets shutdown flag."""
+        """Test signal handler sets shutdown flag and stops consuming."""
+        self.worker.rabbitmq_consumer = Mock()
+
         self.worker._handle_signal(signal.SIGTERM, None)
 
         self.assertTrue(self.worker.shutdown_requested)
+        self.worker.rabbitmq_consumer.stop_consuming.assert_called_once()
 
     def test_log_job_event_success(self):
         """Test logging job event successfully."""
@@ -286,126 +289,6 @@ class TestWorkerDaemon(unittest.TestCase):
 
         self.db_client.upsert_vm_runtime_state.assert_any_call("demo", {"status": "running"}, "background_refresh")
         self.db_client.upsert_vm_runtime_state.assert_any_call("clonebox", {"status": "stopped"}, "background_refresh")
-
-    def test_run_no_jobs_available(self):
-        """Test run loop when no jobs are available."""
-        # Health check passes
-        self.db_client.health_check.return_value = True
-
-        # No jobs available
-        self.db_client.claim_next_job.return_value = None
-
-        # Set shutdown after first iteration
-        call_count = [0]
-
-        def trigger_shutdown(host_id, worker_id):
-            call_count[0] += 1
-            if call_count[0] >= 1:
-                self.worker.shutdown_requested = True
-
-        self.db_client.claim_next_job.side_effect = trigger_shutdown
-
-        self.worker.run()
-
-        self.db_client.health_check.assert_called_once()
-        self.assertGreaterEqual(self.db_client.claim_next_job.call_count, 1)
-        self.assertFalse(self.worker.running)
-
-    def test_run_processes_job(self):
-        """Test run loop processes a job."""
-        # Health check passes
-        self.db_client.health_check.return_value = True
-
-        # Return a job once, then trigger shutdown
-        job = {
-            "id": 1,
-            "type": "provision_vm",
-            "targetHostId": "test-host",
-            "targetVmId": "test-vm",
-            "payload": {},
-        }
-
-        call_count = [0]
-
-        def claim_job_then_shutdown(host_id, worker_id):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                return job
-            self.worker.shutdown_requested = True
-            return None
-
-        self.db_client.claim_next_job.side_effect = claim_job_then_shutdown
-        self.executor.get_resource_locks.return_value = ["vm:test-vm"]
-        self.db_client.acquire_resource_locks.return_value = True
-        self.executor.execute_job.return_value = {"success": True}
-
-        self.worker.run()
-
-        self.db_client.health_check.assert_called_once()
-        self.assertGreaterEqual(self.db_client.claim_next_job.call_count, 1)
-        self.executor.execute_job.assert_called()
-
-    def test_run_health_check_fails(self):
-        """Test run exits if health check fails."""
-        self.db_client.health_check.return_value = False
-
-        with self.assertRaises(SystemExit) as cm:
-            self.worker.run()
-
-        self.assertEqual(cm.exception.code, 1)
-
-    def test_run_handles_exception_in_loop(self):
-        """Test run handles exceptions in main loop gracefully."""
-        # Health check passes
-        self.db_client.health_check.return_value = True
-
-        # Raise exception on first claim, then trigger shutdown
-        call_count = [0]
-
-        def claim_with_error(host_id, worker_id):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                raise RuntimeError("Test error")
-            self.worker.shutdown_requested = True
-
-        self.db_client.claim_next_job.side_effect = claim_with_error
-
-        self.worker.run()
-
-        # Should have called claim_next_job multiple times (once with error, once after)
-        self.assertGreaterEqual(self.db_client.claim_next_job.call_count, 2)
-
-    def test_on_socket_wake_sets_event(self):
-        """Test that socket wake callback sets the wake event."""
-        self.assertFalse(self.worker.wake_event.is_set())
-
-        self.worker._on_socket_wake()
-
-        self.assertTrue(self.worker.wake_event.is_set())
-
-    def test_on_socket_health_returns_status(self):
-        """Test that socket health callback returns worker status."""
-        # Add some active jobs
-        self.worker.active_jobs.add(1)
-        self.worker.active_jobs.add(2)
-
-        health = self.worker._on_socket_health()
-
-        self.assertEqual(health["status"], "ok")
-        self.assertEqual(health["worker_id"], "test-worker")
-        self.assertEqual(health["host_id"], "test-host")
-        self.assertEqual(health["concurrency"], 2)
-        self.assertEqual(health["active_jobs"], 2)
-        self.assertEqual(health["available_slots"], 0)
-
-    def test_signal_handler_triggers_wake_event(self):
-        """Test that signal handler triggers wake event for fast shutdown."""
-        self.assertFalse(self.worker.wake_event.is_set())
-
-        self.worker._handle_signal(signal.SIGTERM, None)
-
-        self.assertTrue(self.worker.shutdown_requested)
-        self.assertTrue(self.worker.wake_event.is_set())
 
     def test_process_job_deletes_runtime_state(self):
         """Test job result with deleteRuntimeState flag."""
@@ -666,6 +549,106 @@ class TestWorkerDaemon(unittest.TestCase):
 
         # Should not raise exception
         self.worker._refresh_runtime_state_caches()
+
+    def test_process_rabbitmq_message_success(self):
+        """Test processing RabbitMQ message successfully."""
+        message = {
+            "job_id": "123",
+            "job_type": "provision",
+            "target_host_id": "test-host"
+        }
+
+        job = {
+            "id": "123",
+            "type": "provision",
+            "status": "published",
+            "config": {"vm_name": "test-vm"}
+        }
+
+        with (
+            patch.object(self.worker, "_call_api", return_value=job) as mock_api,
+            patch.object(self.worker, "_process_job", return_value=True) as mock_process,
+        ):
+            result = self.worker._process_rabbitmq_message(message)
+
+            self.assertTrue(result)
+            self.assertEqual(mock_api.call_count, 2)
+            mock_api.assert_any_call("GET", "/worker/jobs/123")
+            mock_api.assert_any_call(
+                "POST",
+                "/worker/jobs/123/start",
+                {"worker_id": "test-worker", "worker_host_id": "test-host"}
+            )
+            mock_process.assert_called_once_with(job)
+
+    def test_process_rabbitmq_message_missing_job_id(self):
+        """Test processing message without job_id returns False."""
+        message = {"target_host_id": "test-host"}
+
+        result = self.worker._process_rabbitmq_message(message)
+
+        self.assertFalse(result)
+
+    def test_process_rabbitmq_message_wrong_host(self):
+        """Test processing message for different host returns False."""
+        message = {
+            "job_id": "123",
+            "target_host_id": "wrong-host"
+        }
+
+        result = self.worker._process_rabbitmq_message(message)
+
+        self.assertFalse(result)
+
+    def test_process_rabbitmq_message_job_failure(self):
+        """Test processing job that fails returns False."""
+        message = {
+            "job_id": "123",
+            "target_host_id": "test-host"
+        }
+
+        job = {"id": "123", "type": "provision"}
+
+        with (
+            patch.object(self.worker, "_call_api", return_value=job),
+            patch.object(self.worker, "_process_job", return_value=False),
+        ):
+            result = self.worker._process_rabbitmq_message(message)
+
+            self.assertFalse(result)
+
+    def test_process_rabbitmq_message_api_error_raises(self):
+        """Test API error raises exception for requeue."""
+        import requests
+        message = {
+            "job_id": "123",
+            "target_host_id": "test-host"
+        }
+
+        with (
+            patch.object(self.worker, "_call_api", side_effect=requests.exceptions.RequestException("API error")),
+            self.assertRaises(requests.exceptions.RequestException),
+        ):
+            self.worker._process_rabbitmq_message(message)
+
+    def test_process_rabbitmq_message_unexpected_error_raises(self):
+        """Test unexpected error marks job failed and raises."""
+        message = {
+            "job_id": "123",
+            "target_host_id": "test-host"
+        }
+
+        job = {"id": "123", "type": "provision"}
+
+        with (
+            patch.object(self.worker, "_call_api", side_effect=[job, None, None]) as mock_api,
+            patch.object(self.worker, "_process_job", side_effect=ValueError("Test error")),
+            self.assertRaises(ValueError),
+        ):
+            self.worker._process_rabbitmq_message(message)
+
+            # Should try to mark as failed
+            self.assertGreaterEqual(mock_api.call_count, 3)
 
 
 class TestSudoFunctions(unittest.TestCase):

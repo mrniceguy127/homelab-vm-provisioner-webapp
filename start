@@ -7,6 +7,7 @@ CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
 PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
 WORKER_DIR="$ROOT_DIR/homelab-vm-provisioner-worker"
+QUEUE_DIR="$ROOT_DIR/homelab-vm-provisioner-job-queue"
 PROXY_PUBLIC_INDEX="$PROXY_DIR/public/index.html"
 
 PROVISIONER_CLI_PATH="${PROVISIONER_CLI_PATH:-homelab-vm-provisioner-cli}"
@@ -42,6 +43,7 @@ ENABLE_API="${ENABLE_API:-true}"
 ENABLE_DB_SERVICE="${ENABLE_DB_SERVICE:-true}"
 ENABLE_DB="${ENABLE_DB:-true}"
 ENABLE_WORKER="${ENABLE_WORKER:-true}"
+ENABLE_QUEUE="${ENABLE_QUEUE:-true}"
 
 PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$PROVISIONER_DIR/.venv}"
 PROVISIONER_PYTHON_BIN="$PROVISIONER_VENV_DIR/bin/python"
@@ -123,6 +125,7 @@ for arg in "$@"; do
             ENABLE_CLIENT=true
             ENABLE_API=false
             ENABLE_DB_SERVICE=false
+            ENABLE_QUEUE=false
             ENABLE_WORKER=false
             ;;
     esac
@@ -134,6 +137,7 @@ printf '    WORKER:      %s\n' "$ENABLE_WORKER"
 printf '    CLIENT:      %s\n' "$ENABLE_CLIENT"
 printf '    API:         %s\n' "$ENABLE_API"
 printf '    DB_SERVICE:  %s\n' "$ENABLE_DB_SERVICE"
+printf '    QUEUE:       %s\n' "$ENABLE_QUEUE"
 printf '    DB:          %s\n' "$ENABLE_DB"
 printf '\n'
 
@@ -366,6 +370,16 @@ wait_for_db_service() {
 if [[ "$ENABLE_DB" == "true" && "$USE_DOCKER" == "false" ]]; then
     printf '==> Starting native PostgreSQL service\n'
     "$DB_DIR/start"
+fi
+
+# Start RabbitMQ queue service when enabled
+if [[ "$ENABLE_QUEUE" == "true" ]]; then
+    printf '==> Starting RabbitMQ queue service\n'
+    if [[ "$USE_DOCKER" == "true" ]]; then
+        "$QUEUE_DIR/start" --docker
+    else
+        "$QUEUE_DIR/start"
+    fi
 fi
 
 if [[ "$ENABLE_CLIENT" == "true" ]]; then

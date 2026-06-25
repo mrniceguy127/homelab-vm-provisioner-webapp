@@ -10,13 +10,14 @@ import subprocess
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
+
+import requests
 
 from hlvmp_worker.config import WorkerConfig
 from hlvmp_worker.db_client import DatabaseClient
 from hlvmp_worker.executor import JobExecutionError, JobExecutor
-from hlvmp_worker.socket_server import SocketServer
+from hlvmp_worker.rabbitmq_consumer import RabbitMqConsumer
 
 # Configure logging
 logging.basicConfig(
@@ -107,10 +108,8 @@ class WorkerDaemon:
         self.db_client = db_client
         self.executor = executor
         self.running = False
-        self.active_jobs: set[int] = set()
         self.shutdown_requested = False
-        self.socket_server: Optional[SocketServer] = None
-        self.wake_event = threading.Event()  # Event for socket wakeups
+        self.rabbitmq_consumer: Optional[RabbitMqConsumer] = None
         self._next_state_refresh_at = time.monotonic() + self.config.state_refresh_interval
 
     def _handle_signal(self, signum, frame):  # noqa: ARG002
@@ -122,32 +121,8 @@ class WorkerDaemon:
         """
         logger.info(f"Received signal {signum}, initiating graceful shutdown...")
         self.shutdown_requested = True
-        # Wake the main loop to process shutdown quickly
-        self.wake_event.set()
-
-    def _on_socket_wake(self):
-        """Handle wake message from socket server.
-
-        This is called by the socket server when a wake message is received.
-        It triggers an immediate job scan by setting the wake event.
-        """
-        logger.info("Socket wake received, triggering immediate job scan")
-        self.wake_event.set()
-
-    def _on_socket_health(self) -> dict:
-        """Handle health message from socket server.
-
-        Returns:
-            Health status dictionary
-        """
-        return {
-            "status": "ok",
-            "worker_id": self.config.worker_id,
-            "host_id": self.config.host_id,
-            "concurrency": self.config.concurrency,
-            "active_jobs": len(self.active_jobs),
-            "available_slots": self.config.concurrency - len(self.active_jobs),
-        }
+        if self.rabbitmq_consumer:
+            self.rabbitmq_consumer.stop_consuming()
 
     def _log_job_event(
         self, job_id: int, level: str, message: str, metadata: Optional[dict] = None
@@ -269,8 +244,7 @@ class WorkerDaemon:
                 except Exception as e:
                     logger.error(f"Error releasing locks for job {job_id}: {e}")
 
-            # Remove from active jobs
-            self.active_jobs.discard(job_id)
+
 
     def _refresh_runtime_state_caches(self):
         """Refresh cached runtime state for all known service-managed VMs."""
@@ -284,6 +258,87 @@ class WorkerDaemon:
                 )
         except Exception as e:
             logger.warning(f"Runtime state refresh failed: {e}")
+
+    def _call_api(self, method: str, endpoint: str, json_data: Optional[dict] = None) -> dict:
+        """Call API internal endpoint.
+
+        Args:
+            method: HTTP method (GET, POST)
+            endpoint: API endpoint path (e.g., '/worker/jobs/123/start')
+            json_data: JSON request body (optional)
+
+        Returns:
+            Response JSON as dict
+
+        Raises:
+            requests.exceptions.RequestException: On API call failure
+        """
+        url = f"{self.config.api_internal_url}{endpoint}"
+        response = requests.request(method, url, json=json_data, timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    def _process_rabbitmq_message(self, message: dict) -> bool:
+        """Process RabbitMQ job message.
+
+        Args:
+            message: Job message from RabbitMQ (contains job_id, job_type, target_host_id)
+
+        Returns:
+            True to ACK message, False to NACK
+        """
+        job_id = message.get("job_id")
+        target_host_id = message.get("target_host_id")
+
+        if not job_id:
+            logger.error(f"Message missing job_id: {message}")
+            return False  # NACK invalid message
+
+        # Verify target host matches
+        if target_host_id != self.config.host_id:
+            logger.warning(f"Job {job_id} targets {target_host_id}, but worker is {self.config.host_id}")
+            return False  # NACK, job not for this host
+
+        logger.info(f"Processing RabbitMQ job {job_id}")
+
+        try:
+            # Fetch full job details from API
+            job = self._call_api("GET", f"/worker/jobs/{job_id}")
+
+            # Mark job as started
+            self._call_api(
+                "POST",
+                f"/worker/jobs/{job_id}/start",
+                {"worker_id": self.config.worker_id, "worker_host_id": self.config.host_id}
+            )
+
+            # Process job using existing logic
+            success = self._process_job(job)
+
+            if success:
+                logger.info(f"RabbitMQ job {job_id} succeeded")
+                return True  # ACK message
+            logger.error(f"RabbitMQ job {job_id} failed")
+            # Job already marked as failed by _process_job, just NACK without requeue
+            return False
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API call failed for job {job_id}: {e}")
+            # Don't ACK - message will be requeued for retry
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error processing RabbitMQ job {job_id}: {e}", exc_info=True)
+            try:
+                # Try to mark job as failed via API
+                self._call_api(
+                    "POST",
+                    f"/worker/jobs/{job_id}/fail",
+                    {"error": str(e), "retryable": True}
+                )
+            except Exception as api_error:
+                logger.error(f"Failed to mark job {job_id} as failed: {api_error}")
+            # Don't ACK - message will be requeued
+            raise
 
     def run(self):
         """Run the worker daemon.
@@ -309,95 +364,31 @@ class WorkerDaemon:
             sys.exit(1)
 
         logger.info("Database microservice is healthy")
-
-        # Start socket server if configured
-        if self.config.socket_path:
-            try:
-                self.socket_server = SocketServer(
-                    self.config.socket_path,
-                    on_wake=self._on_socket_wake,
-                    on_health=self._on_socket_health,
-                )
-                self.socket_server.start()
-                logger.info(f"Socket server enabled at {self.config.socket_path}")
-            except Exception as e:
-                logger.warning(f"Failed to start socket server: {e}")
-                logger.warning("Continuing without socket server, using fallback polling only")
-                self.socket_server = None
-        else:
-            logger.info("Socket server not configured, using fallback polling only")
+        logger.info("Starting RabbitMQ consumer mode")
 
         self.running = True
 
-        # Thread pool for concurrent job execution
-        with ThreadPoolExecutor(max_workers=self.config.concurrency) as executor:
-            futures = []
+        try:
+            # Create and connect RabbitMQ consumer
+            self.rabbitmq_consumer = RabbitMqConsumer.from_env()
+            self.rabbitmq_consumer.connect()
 
-            try:
-                while not self.shutdown_requested:
-                    # Clean up completed futures
-                    futures = [f for f in futures if not f.done()]
+            # Start consuming (blocking until shutdown)
+            self.rabbitmq_consumer.consume(
+                callback=self._process_rabbitmq_message,
+                prefetch_count=self.config.concurrency
+            )
 
-                    # Check if we can claim more jobs
-                    available_slots = self.config.concurrency - len(futures)
-
-                    now = time.monotonic()
-                    if now >= self._next_state_refresh_at:
-                        self._refresh_runtime_state_caches()
-                        self._next_state_refresh_at = now + self.config.state_refresh_interval
-
-                    if available_slots > 0:
-                        try:
-                            # Try to claim a job
-                            job = self.db_client.claim_next_job(
-                                self.config.host_id, self.config.worker_id
-                            )
-
-                            if job:
-                                job_id = job["id"]
-                                self.active_jobs.add(job_id)
-                                logger.debug(f"Claimed job {job_id}, submitting to executor")
-
-                                # Submit job to thread pool
-                                future = executor.submit(self._process_job, job)
-                                futures.append(future)
-
-                                # Clear wake event after claiming a job
-                                self.wake_event.clear()
-                            else:
-                                # No jobs available, wait for wake or poll interval
-                                # Use wake_event.wait() with timeout for efficient waiting
-                                self.wake_event.wait(timeout=self.config.poll_interval)
-                                self.wake_event.clear()
-
-                        except Exception as e:
-                            logger.error(f"Error in main loop: {e}", exc_info=True)
-                            # Wait before retrying on error
-                            self.wake_event.wait(timeout=self.config.poll_interval)
-                            self.wake_event.clear()
-                    else:
-                        # All slots full, wait a bit or for wake
-                        self.wake_event.wait(timeout=1.0)
-                        self.wake_event.clear()
-
-            finally:
-                # Shutdown: wait for active jobs to complete
-                logger.info("Shutdown requested, waiting for active jobs to complete...")
-                logger.info(f"Active jobs: {self.active_jobs}")
-
-                # Wait for all futures to complete
-                for future in as_completed(futures, timeout=300):
-                    try:
-                        future.result()
-                    except Exception as e:
-                        logger.error(f"Job execution error during shutdown: {e}")
-
-                # Stop socket server
-                if self.socket_server:
-                    self.socket_server.stop()
-
-        logger.info("Worker daemon stopped")
-        self.running = False
+        except KeyboardInterrupt:
+            logger.info("RabbitMQ consumer interrupted")
+        except Exception as e:
+            logger.error(f"RabbitMQ consumer error: {e}", exc_info=True)
+            raise
+        finally:
+            if self.rabbitmq_consumer:
+                self.rabbitmq_consumer.close()
+            logger.info("Worker daemon stopped")
+            self.running = False
 
 
 def main():  # pragma: no cover

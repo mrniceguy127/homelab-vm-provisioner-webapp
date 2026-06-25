@@ -6,6 +6,7 @@ API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
 PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
+QUEUE_DIR="$ROOT_DIR/homelab-vm-provisioner-job-queue"
 PROXY_PUBLIC_DIR="$PROXY_DIR/public"
 
 # Source .env file if it exists
@@ -20,6 +21,7 @@ ENABLE_CLIENT="${ENABLE_CLIENT:-true}"
 ENABLE_API="${ENABLE_API:-true}"
 ENABLE_DB_SERVICE="${ENABLE_DB_SERVICE:-true}"
 ENABLE_DB="${ENABLE_DB:-true}"
+ENABLE_QUEUE="${ENABLE_QUEUE:-true}"
 
 # Parse arguments
 USE_DOCKER=false
@@ -31,6 +33,7 @@ for arg in "$@"; do
             ENABLE_CLIENT=true
             ENABLE_API=false
             ENABLE_DB_SERVICE=false
+            ENABLE_QUEUE=false
             ENABLE_DB=false
             ;;
         --docker)
@@ -52,6 +55,7 @@ log "Build mode configuration:"
 log "  CLIENT:      $ENABLE_CLIENT"
 log "  API:         $ENABLE_API"
 log "  DB_SERVICE:  $ENABLE_DB_SERVICE"
+log "  QUEUE:       $ENABLE_QUEUE"
 log "  DB:          $ENABLE_DB"
 log ""
 
@@ -60,7 +64,12 @@ if [[ "$ENABLE_DB" == "true" || "$ENABLE_DB_SERVICE" == "true" ]]; then
     log "Building database"
     "$DB_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
 fi
+QUEUE" == "true" ]]; then
+    log "Building job queue"
+    "$QUEUE_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
+fi
 
+if [[ "$ENABLE_
 if [[ "$ENABLE_API" == "true" ]]; then
     log "Building API"
     "$API_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}

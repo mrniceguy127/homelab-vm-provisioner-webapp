@@ -5,6 +5,7 @@ CONTAINERS=(
     "hlvmp-db"
     "hlvmp-api"
     "hlvmp-proxy"
+    "hlvmp-rabbitmq"
 )
 
 log() {
@@ -20,6 +21,7 @@ if [[ "${1:-}" == "--help" ]]; then
     echo "  - hlvmp-db"
     echo "  - hlvmp-api"
     echo "  - hlvmp-proxy"
+    echo "  - hlvmp-rabbitmq"
     exit 0
 fi
 

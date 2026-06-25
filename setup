@@ -7,6 +7,7 @@ CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
 DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
 WORKER_DIR="$ROOT_DIR/homelab-vm-provisioner-worker"
+QUEUE_DIR="$ROOT_DIR/homelab-vm-provisioner-job-queue"
 PROVISIONER_CLI_PATH="${PROVISIONER_CLI_PATH:-homelab-vm-provisioner-cli}"
 if [[ "$PROVISIONER_CLI_PATH" != /* ]]; then
     PROVISIONER_DIR="$ROOT_DIR/$PROVISIONER_CLI_PATH"
@@ -29,6 +30,7 @@ ENABLE_API="${ENABLE_API:-true}"
 ENABLE_DB_SERVICE="${ENABLE_DB_SERVICE:-true}"
 ENABLE_DB="${ENABLE_DB:-true}"
 ENABLE_WORKER="${ENABLE_WORKER:-true}"
+ENABLE_QUEUE="${ENABLE_QUEUE:-true}"
 
 # Parse arguments
 USE_DOCKER=false
@@ -53,6 +55,7 @@ for arg in "$@"; do
             ENABLE_API=false
             ENABLE_DB_SERVICE=false
             ENABLE_DB=false
+            ENABLE_QUEUE=false
             ENABLE_WORKER=false
             ;;
         *)
@@ -112,6 +115,7 @@ log "  WORKER:      $ENABLE_WORKER"
 log "  CLIENT:      $ENABLE_CLIENT"
 log "  API:         $ENABLE_API"
 log "  DB_SERVICE:  $ENABLE_DB_SERVICE"
+log "  QUEUE:       $ENABLE_QUEUE"
 log "  DB:          $ENABLE_DB"
 log ""
 
@@ -169,6 +173,10 @@ fi
 if [[ "$ENABLE_DB" == "true" || "$ENABLE_DB_SERVICE" == "true" ]]; then
     log "Setting up database"
     "$DB_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
+fi
+if [[ "$ENABLE_QUEUE" == "true" ]]; then
+    log "Setting up job queue"
+    "$QUEUE_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 fi
 
 if [[ "$ENABLE_API" == "true" ]]; then

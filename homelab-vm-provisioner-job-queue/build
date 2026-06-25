@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Build script for homelab-vm-provisioner-job-queue
+#
+# Provisions RabbitMQ topology: vhost, users, exchange, queues, bindings
+# This script is idempotent and safe to run multiple times.
+#
+# Usage: ./build
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Source component .env
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Required environment variables
+: "${QUEUE_HOST:?QUEUE_HOST is required}"
+: "${QUEUE_PORT:?QUEUE_PORT is required}"
+: "${QUEUE_VHOST:?QUEUE_VHOST is required}"
+: "${QUEUE_EXCHANGE:?QUEUE_EXCHANGE is required}"
+: "${QUEUE_ROUTING_KEY_PREFIX:?QUEUE_ROUTING_KEY_PREFIX is required}"
+: "${QUEUE_ADMIN_USER:?QUEUE_ADMIN_USER is required}"
+: "${QUEUE_ADMIN_PASSWORD:?QUEUE_ADMIN_PASSWORD is required}"
+: "${QUEUE_API_USER:?QUEUE_API_USER is required}"
+: "${QUEUE_API_PASSWORD:?QUEUE_API_PASSWORD is required}"
+: "${WORKER_QUEUE_USER:?WORKER_QUEUE_USER is required}"
+: "${WORKER_QUEUE_PASSWORD:?WORKER_QUEUE_PASSWORD is required}"
+: "${HOST_ID:?HOST_ID is required}"
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+# Construct management API base URL
+MGMT_API_BASE="http://$QUEUE_HOST:15672/api"
+AUTH_HEADER="Authorization: Basic $(printf '%s:%s' "$QUEUE_ADMIN_USER" "$QUEUE_ADMIN_PASSWORD" | base64)"
+
+# Derived values
+QUEUE_NAME="provisioner.worker.$HOST_ID"
+ROUTING_KEY="$QUEUE_ROUTING_KEY_PREFIX.$HOST_ID"
+
+log "Provisioning RabbitMQ topology"
+log "  Vhost: $QUEUE_VHOST"
+log "  Exchange: $QUEUE_EXCHANGE"
+log "  Queue: $QUEUE_NAME"
+log "  Routing key: $ROUTING_KEY"
+log ""
+
+# Verify RabbitMQ is reachable
+log "Verifying RabbitMQ management API is reachable"
+if ! curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    "$MGMT_API_BASE/overview" >/dev/null; then
+    printf 'Error: Cannot reach RabbitMQ management API at %s\n' "$MGMT_API_BASE" >&2
+    printf 'Ensure RabbitMQ is running (./start) and credentials are correct\n' >&2
+    exit 1
+fi
+
+# Create vhost
+log "Creating vhost: $QUEUE_VHOST"
+curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    -X PUT "$MGMT_API_BASE/vhosts/$QUEUE_VHOST" >/dev/null || true
+
+# Create API publisher user
+log "Creating API publisher user: $QUEUE_API_USER"
+curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    -X PUT -H "Content-Type: application/json" \
+    -d "{\"password\":\"$QUEUE_API_PASSWORD\",\"tags\":\"\"}" \
+    "$MGMT_API_BASE/users/$QUEUE_API_USER" >/dev/null
+
+# Grant API publisher permissions (write to exchange only)
+log "Configuring API publisher permissions"
+curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    -X PUT -H "Content-Type: application/json" \
+    -d "{\"configure\":\"\",\"write\":\"$QUEUE_EXCHANGE\",\"read\":\"\"}" \
+    "$MGMT_API_BASE/permissions/$QUEUE_VHOST/$QUEUE_API_USER" >/dev/null
+
+# Create worker consumer user
+log "Creating worker consumer user: $WORKER_QUEUE_USER"
+curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    -X PUT -H "Content-Type: application/json" \
+    -d "{\"password\":\"$WORKER_QUEUE_PASSWORD\",\"tags\":\"\"}" \
+    "$MGMT_API_BASE/users/$WORKER_QUEUE_USER" >/dev/null
+
+# Grant worker consumer permissions (read from queue only)
+log "Configuring worker consumer permissions"
+curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    -X PUT -H "Content-Type: application/json" \
+    -d "{\"configure\":\"\",\"write\":\"\",\"read\":\"$QUEUE_NAME\"}" \
+    "$MGMT_API_BASE/permissions/$QUEUE_VHOST/$WORKER_QUEUE_USER" >/dev/null
+
+# Create exchange
+log "Creating exchange: $QUEUE_EXCHANGE"
+curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    -X PUT -H "Content-Type: application/json" \
+    -d '{"type":"topic","durable":true}' \
+    "$MGMT_API_BASE/exchanges/$QUEUE_VHOST/$QUEUE_EXCHANGE" >/dev/null
+
+# Create worker queue
+log "Creating queue: $QUEUE_NAME"
+curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    -X PUT -H "Content-Type: application/json" \
+    -d '{"durable":true,"arguments":{}}' \
+    "$MGMT_API_BASE/queues/$QUEUE_VHOST/$QUEUE_NAME" >/dev/null
+
+# Bind queue to exchange
+log "Binding queue to exchange with routing key: $ROUTING_KEY"
+curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    -X POST -H "Content-Type: application/json" \
+    -d "{\"routing_key\":\"$ROUTING_KEY\",\"arguments\":{}}" \
+    "$MGMT_API_BASE/bindings/$QUEUE_VHOST/e/$QUEUE_EXCHANGE/q/$QUEUE_NAME" >/dev/null
+
+log ""
+log "RabbitMQ topology provisioned successfully"
+log "  Users created: $QUEUE_API_USER, $WORKER_QUEUE_USER"
+log "  Exchange: $QUEUE_EXCHANGE (topic)"
+log "  Queue: $QUEUE_NAME (durable)"
+log "  Binding: $QUEUE_NAME <- $QUEUE_EXCHANGE via $ROUTING_KEY"

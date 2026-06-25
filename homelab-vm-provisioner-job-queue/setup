@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# Setup script for homelab-vm-provisioner-job-queue
+#
+# Usage: ./setup [--docker] [--skip-system-packages]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$SCRIPT_DIR"
+
+# Source component .env (parent vars inherited through execution sequence)
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Defaults
+QUEUE_MODE="${QUEUE_MODE:-docker}"
+SKIP_SYSTEM_PACKAGES="${SKIP_SYSTEM_PACKAGES:-false}"
+
+# Parse arguments
+for arg in "$@"; do
+    case "$arg" in
+        --docker)
+            QUEUE_MODE=docker
+            ;;
+        --skip-system-packages)
+            SKIP_SYSTEM_PACKAGES=true
+            ;;
+        --help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Setup RabbitMQ for job queue."
+            echo ""
+            echo "Options:"
+            echo "  --docker                 Use Docker mode"
+            echo "  --skip-system-packages   Skip system package installation"
+            echo "  --help                   Show this help message"
+            echo ""
+            echo "Environment variables:"
+            echo "  QUEUE_MODE              Queue mode (docker or non-docker, default: docker)"
+            echo "  SKIP_SYSTEM_PACKAGES    Skip package installation (default: false)"
+            exit 0
+            ;;
+    esac
+done
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+run_sudo() {
+    if [[ "${EUID}" -eq 0 ]]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+ensure_sudo_credentials() {
+    local reason="$1"
+
+    if [[ "${EUID}" -eq 0 ]]; then
+        return
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        printf 'sudo is required for this setup step but is not installed.\n' >&2
+        exit 1
+    fi
+
+    if sudo -n -v >/dev/null 2>&1; then
+        return
+    fi
+
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        printf '%s\n' "$reason" >&2
+        printf 'Run this script from an interactive terminal or pre-authorize sudo with `sudo -v` first.\n' >&2
+        exit 1
+    fi
+
+    log "$reason"
+    sudo -v
+}
+
+log "Queue setup mode: $QUEUE_MODE"
+
+if [[ "$QUEUE_MODE" == "docker" ]]; then
+    log "Docker mode: Pulling RabbitMQ image"
+    
+    if ! command -v docker >/dev/null 2>&1; then
+        printf 'Error: Docker is not installed\n' >&2
+        printf 'Install Docker Desktop or Docker Engine before using Docker mode\n' >&2
+        exit 1
+    fi
+    
+    docker pull rabbitmq:3-management
+    log "RabbitMQ Docker image ready"
+    
+elif [[ "$QUEUE_MODE" == "non-docker" ]]; then
+    if [[ "$SKIP_SYSTEM_PACKAGES" == "true" ]]; then
+        log "Skipping RabbitMQ package installation"
+        
+        # Verify RabbitMQ is available
+        if ! command -v rabbitmqctl >/dev/null 2>&1; then
+            printf 'Error: RabbitMQ is not installed and package installation was skipped\n' >&2
+            printf 'Install RabbitMQ manually or run setup without --skip-system-packages\n' >&2
+            exit 1
+        fi
+        
+        log "RabbitMQ is already installed"
+    else
+        ensure_sudo_credentials "Installing RabbitMQ system packages requires sudo access."
+        log "Installing RabbitMQ server"
+        
+        if command -v apt-get >/dev/null 2>&1; then
+            # Debian/Ubuntu
+            log "Detected Debian/Ubuntu"
+            run_sudo apt-get update
+            run_sudo apt-get install -y rabbitmq-server
+            
+        elif command -v dnf >/dev/null 2>&1; then
+            # Fedora/RHEL 8+
+            log "Detected Fedora/RHEL"
+            run_sudo dnf install -y rabbitmq-server
+            
+        elif command -v yum >/dev/null 2>&1; then
+            # CentOS/RHEL 7
+            log "Detected CentOS/RHEL 7"
+            run_sudo yum install -y rabbitmq-server
+            
+        elif command -v pacman >/dev/null 2>&1; then
+            # Arch Linux
+            log "Detected Arch Linux"
+            run_sudo pacman -S --noconfirm rabbitmq
+            
+        elif command -v zypper >/dev/null 2>&1; then
+            # openSUSE
+            log "Detected openSUSE"
+            run_sudo zypper install -y rabbitmq-server
+            
+        else
+            printf 'Error: Unsupported package manager\n' >&2
+            printf 'Supported: apt-get, dnf, yum, pacman, zypper\n' >&2
+            printf 'Install RabbitMQ manually and run with --skip-system-packages\n' >&2
+            exit 1
+        fi
+        
+        log "RabbitMQ server installed"
+    fi
+    
+    # Enable management plugin
+    log "Enabling RabbitMQ management plugin"
+    if [[ "${EUID}" -eq 0 ]]; then
+        rabbitmq-plugins enable rabbitmq_management || true
+    else
+        run_sudo rabbitmq-plugins enable rabbitmq_management || true
+    fi
+    
+else
+    printf 'Error: Invalid QUEUE_MODE: %s\n' "$QUEUE_MODE" >&2
+    printf 'Allowed values: docker, non-docker\n' >&2
+    exit 1
+fi
+
+log "Queue setup complete"

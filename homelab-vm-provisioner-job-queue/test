@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Test script for homelab-vm-provisioner-job-queue
+#
+# Verifies RabbitMQ configuration and topology
+#
+# Usage: ./test
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Source component .env
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Required environment variables
+: "${QUEUE_HOST:?QUEUE_HOST is required}"
+: "${QUEUE_PORT:?QUEUE_PORT is required}"
+: "${QUEUE_VHOST:?QUEUE_VHOST is required}"
+: "${QUEUE_EXCHANGE:?QUEUE_EXCHANGE is required}"
+: "${QUEUE_ROUTING_KEY_PREFIX:?QUEUE_ROUTING_KEY_PREFIX is required}"
+: "${QUEUE_ADMIN_USER:?QUEUE_ADMIN_USER is required}"
+: "${QUEUE_ADMIN_PASSWORD:?QUEUE_ADMIN_PASSWORD is required}"
+: "${HOST_ID:?HOST_ID is required}"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RESET='\033[0m'
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+pass() {
+    printf "${GREEN}✓ %s${RESET}\n" "$*"
+}
+
+fail() {
+    printf "${RED}✗ %s${RESET}\n" "$*"
+    EXIT_CODE=1
+}
+
+# Construct management API base URL
+MGMT_API_BASE="http://$QUEUE_HOST:15672/api"
+
+# Derived values
+QUEUE_NAME="provisioner.worker.$HOST_ID"
+ROUTING_KEY="$QUEUE_ROUTING_KEY_PREFIX.$HOST_ID"
+
+EXIT_CODE=0
+
+log "Testing RabbitMQ configuration"
+log ""
+
+# Test: RabbitMQ is reachable
+log "Checking RabbitMQ connectivity"
+if curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    "$MGMT_API_BASE/overview" >/dev/null; then
+    pass "RabbitMQ management API is reachable"
+else
+    fail "RabbitMQ management API is not reachable"
+fi
+
+# Test: Vhost exists
+log "Checking vhost: $QUEUE_VHOST"
+if curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    "$MGMT_API_BASE/vhosts/$QUEUE_VHOST" >/dev/null; then
+    pass "Vhost exists: $QUEUE_VHOST"
+else
+    fail "Vhost does not exist: $QUEUE_VHOST"
+fi
+
+# Test: Exchange exists
+log "Checking exchange: $QUEUE_EXCHANGE"
+EXCHANGE_URL=$(printf '%s' "$QUEUE_EXCHANGE" | jq -sRr @uri)
+if curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    "$MGMT_API_BASE/exchanges/$QUEUE_VHOST/$EXCHANGE_URL" >/dev/null; then
+    pass "Exchange exists: $QUEUE_EXCHANGE"
+else
+    fail "Exchange does not exist: $QUEUE_EXCHANGE"
+fi
+
+# Test: Queue exists
+log "Checking queue: $QUEUE_NAME"
+QUEUE_URL=$(printf '%s' "$QUEUE_NAME" | jq -sRr @uri)
+if curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    "$MGMT_API_BASE/queues/$QUEUE_VHOST/$QUEUE_URL" >/dev/null; then
+    pass "Queue exists: $QUEUE_NAME"
+else
+    fail "Queue does not exist: $QUEUE_NAME"
+fi
+
+# Test: Binding exists
+log "Checking binding: $QUEUE_NAME <- $QUEUE_EXCHANGE"
+if curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+    "$MGMT_API_BASE/queues/$QUEUE_VHOST/$QUEUE_URL/bindings" | \
+    jq -e ".[] | select(.source == \"$QUEUE_EXCHANGE\" and .routing_key == \"$ROUTING_KEY\")" >/dev/null; then
+    pass "Binding exists with routing key: $ROUTING_KEY"
+else
+    fail "Binding does not exist"
+fi
+
+log ""
+
+if [[ $EXIT_CODE -eq 0 ]]; then
+    log "All checks passed"
+else
+    log "Some checks failed"
+fi
+
+exit $EXIT_CODE

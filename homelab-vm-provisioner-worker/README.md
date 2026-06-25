@@ -148,7 +148,7 @@ The worker:
 ## Limitations
 
 - Cannot be dockerized (must run on host for libvirt access)
-- No Unix socket wakeup (polls every `WORKER_POLL_INTERVAL` seconds)
+- Requires RabbitMQ for job consumption
 - No automatic stale job recovery (manual intervention required)
 - No authentication/authorization (assumes trusted environment)
 
@@ -178,16 +178,17 @@ tests/
 ## Overview
 
 ```
-1. Worker polls database for jobs (every WORKER_POLL_INTERVAL seconds)
-2. Database returns next queued job for HOST_ID using row-level locking
-3. Worker claims job (sets claimedBy, claimedAt)
-4. Worker acquires resource locks (vm:<name>, network:<host>, etc.)
-5. Worker marks job as running
+1. Worker consumes job message from RabbitMQ queue (host-specific queue)
+2. Worker validates job targets this host (target_host_id matches HOST_ID)
+3. Worker fetches full job details from API (/internal/worker/jobs/:id)
+4. Worker marks job as running via API (/internal/worker/jobs/:id/start)
+5. Worker acquires resource locks (vm:<name>, network:<host>, etc.)
 6. Worker executes vmctl command (provision, destroy, start, stop, etc.)
 7. Worker captures stdout/stderr and appends events to job log
-8. Worker marks job as succeeded or failed based on exit code
+8. Worker marks job as succeeded or failed via API
 9. Worker releases resource locks
-10. Worker continues polling for next job
+10. Worker ACKs RabbitMQ message (or NACKs on failure)
+11. Worker continues consuming next message from queue
 ```
 
 ## Job Type to Command Mapping
@@ -310,12 +311,11 @@ PROVISIONER_CONCURRENCY=3
 
 The worker handles SIGTERM and SIGINT gracefully:
 
-1. Stop polling for new jobs
-2. Wait for active jobs to complete (with timeout)
-3. Release all resource locks
-4. Exit
+1. Stop consuming new messages from RabbitMQ
+2. Close RabbitMQ connection
+3. Exit
 
-Active jobs complete normally during shutdown. No jobs are abandoned.
+Active jobs complete normally during shutdown. RabbitMQ will requeue any unACKed messages automatically.
 
 ## Monitoring
 
