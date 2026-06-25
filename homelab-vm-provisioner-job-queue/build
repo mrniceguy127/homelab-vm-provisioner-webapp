@@ -44,6 +44,7 @@ done
 # Required environment variables
 : "${QUEUE_HOST:?QUEUE_HOST is required}"
 : "${QUEUE_PORT:?QUEUE_PORT is required}"
+: "${QUEUE_MGMT_PORT:?QUEUE_MGMT_PORT is required}"
 : "${QUEUE_VHOST:?QUEUE_VHOST is required}"
 : "${QUEUE_EXCHANGE:?QUEUE_EXCHANGE is required}"
 : "${QUEUE_ROUTING_KEY_PREFIX:?QUEUE_ROUTING_KEY_PREFIX is required}"
@@ -62,11 +63,11 @@ log() {
 # Check if RabbitMQ is already running
 is_rabbitmq_running() {
     curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
-        "http://$QUEUE_HOST:15672/api/overview" >/dev/null 2>&1
+        "http://$QUEUE_HOST:$QUEUE_MGMT_PORT/api/overview" >/dev/null 2>&1
 }
 
 # Construct management API base URL
-MGMT_API_BASE="http://$QUEUE_HOST:15672/api"
+MGMT_API_BASE="http://$QUEUE_HOST:$QUEUE_MGMT_PORT/api"
 
 # Derived values
 QUEUE_NAME="provisioner.worker.$HOST_ID"

@@ -98,7 +98,7 @@ url="amqp://${QUEUE_ADMIN_USER}:${QUEUE_ADMIN_PASSWORD}@${QUEUE_HOST}:${QUEUE_PO
 
 - RabbitMQ runs in a Docker container
 - Application port exposed on `QUEUE_PORT` (default: 3334)
-- Management UI exposed on 15672
+- Management UI exposed on `QUEUE_MGMT_PORT` (default: 13334)
 - Data persisted in Docker volume
 - No native RabbitMQ installation required
 
@@ -292,7 +292,7 @@ sudo lsof -i :3334
 
 ```bash
 # Verify user permissions via management API
-curl -u admin:password http://localhost:15672/api/users/provisioner_api
+curl -u admin:password http://localhost:13334/api/users/provisioner_api
 
 # Rebuild permissions
 ./build
@@ -334,7 +334,7 @@ sudo iptables -L -n | grep 3334
 ## Port Configuration
 
 **RabbitMQ application port:** 3334  
-**RabbitMQ management UI:** 15672 (Docker mode only)
+**RabbitMQ management UI:** 13334 (Docker mode only)
 
 The application port 3334 must be consistent across:
 - Queue subproject `.env`

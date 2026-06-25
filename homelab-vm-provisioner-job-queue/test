@@ -20,6 +20,7 @@ fi
 # Required environment variables
 : "${QUEUE_HOST:?QUEUE_HOST is required}"
 : "${QUEUE_PORT:?QUEUE_PORT is required}"
+: "${QUEUE_MGMT_PORT:?QUEUE_MGMT_PORT is required}"
 : "${QUEUE_VHOST:?QUEUE_VHOST is required}"
 : "${QUEUE_EXCHANGE:?QUEUE_EXCHANGE is required}"
 : "${QUEUE_ROUTING_KEY_PREFIX:?QUEUE_ROUTING_KEY_PREFIX is required}"
@@ -47,7 +48,7 @@ fail() {
 }
 
 # Construct management API base URL
-MGMT_API_BASE="http://$QUEUE_HOST:15672/api"
+MGMT_API_BASE="http://$QUEUE_HOST:$QUEUE_MGMT_PORT/api"
 
 # Derived values
 QUEUE_NAME="provisioner.worker.$HOST_ID"
