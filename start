@@ -439,22 +439,22 @@ if [[ "$ENABLE_API" == "true" ]]; then
     fi
 fi
 
-# Start worker if enabled
-if [[ "$ENABLE_WORKER" == "true" ]]; then
-    printf '==> Starting worker daemon\n'
-    "$WORKER_DIR/start" &
-    WORKER_PID=$!
-    PIDS+=("$WORKER_PID")
-    sleep 1
-    ensure_process_started "$WORKER_PID" "Worker daemon"
-fi
-
 # Start proxy if client is enabled
 if [[ "$ENABLE_CLIENT" == "true" ]]; then
     if [[ "$USE_DOCKER" == "true" ]]; then
         PROXY_PORT="$PROXY_PORT" API_PORT="$API_PORT" PROXY_API_HOST="$PROXY_API_HOST" "$PROXY_DIR/start" --docker &
         PROXY_PID=$!
         PIDS+=("$PROXY_PID")
+
+        # Start worker last - after all other services are up
+        if [[ "$ENABLE_WORKER" == "true" ]]; then
+            printf '==> Starting worker daemon\n'
+            "$WORKER_DIR/start" &
+            WORKER_PID=$!
+            PIDS+=("$WORKER_PID")
+            sleep 1
+            ensure_process_started "$WORKER_PID" "Worker daemon"
+        fi
 
         trap cleanup EXIT INT TERM
 
@@ -468,11 +468,32 @@ if [[ "$ENABLE_CLIENT" == "true" ]]; then
         PROXY_PID=$!
         PIDS+=("$PROXY_PID")
 
+        # Start worker last - after all other services are up
+        if [[ "$ENABLE_WORKER" == "true" ]]; then
+            printf '==> Starting worker daemon\n'
+            "$WORKER_DIR/start" &
+            WORKER_PID=$!
+            PIDS+=("$WORKER_PID")
+            sleep 1
+            ensure_process_started "$WORKER_PID" "Worker daemon"
+        fi
+
         trap cleanup EXIT INT TERM
         wait "$PROXY_PID"
     fi
 else
     # No proxy, just wait for background services
+    
+    # Start worker last - after all other services are up
+    if [[ "$ENABLE_WORKER" == "true" ]]; then
+        printf '==> Starting worker daemon\n'
+        "$WORKER_DIR/start" &
+        WORKER_PID=$!
+        PIDS+=("$WORKER_PID")
+        sleep 1
+        ensure_process_started "$WORKER_PID" "Worker daemon"
+    fi
+    
     printf '==> Services started in background\n'
     printf '==> Press Ctrl+C to stop\n'
 
