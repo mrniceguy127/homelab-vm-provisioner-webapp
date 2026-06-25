@@ -104,7 +104,7 @@ if [[ "$DOCKER_MODE" == "true" ]]; then
             -e RABBITMQ_DEFAULT_USER="$QUEUE_ADMIN_USER" \
             -e RABBITMQ_DEFAULT_PASS="$QUEUE_ADMIN_PASSWORD" \
             -e RABBITMQ_NODE_PORT="$QUEUE_PORT" \
-            -e RABBITMQ_MANAGEMENT_TCP_PORT="$QUEUE_MGMT_PORT" \
+            -e RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS="-rabbitmq_management listener [{port,$QUEUE_MGMT_PORT}]" \
             -v hlvmp-rabbitmq-data:/var/lib/rabbitmq \
             rabbitmq:3-management
     fi
