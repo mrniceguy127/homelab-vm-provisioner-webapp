@@ -55,6 +55,19 @@ docker_container_running() {
     [[ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" == "true" ]]
 }
 
+docker_container_exists() {
+    docker inspect "$1" >/dev/null 2>&1
+}
+
+# Auto-detect Docker mode if not explicitly specified
+if [[ "$DOCKER_MODE" == "false" ]]; then
+    CONTAINER_NAME="hlvmp-rabbitmq"
+    if docker_container_exists "$CONTAINER_NAME" 2>/dev/null; then
+        log "Auto-detected Docker mode (container exists)"
+        DOCKER_MODE=true
+    fi
+fi
+
 log "Stopping RabbitMQ (Docker mode: $DOCKER_MODE)"
 
 if [[ "$DOCKER_MODE" == "true" ]]; then

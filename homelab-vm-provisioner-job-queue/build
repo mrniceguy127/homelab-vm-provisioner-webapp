@@ -177,5 +177,9 @@ log "  Binding: $QUEUE_NAME <- $QUEUE_EXCHANGE via $ROUTING_KEY"
 if [[ "$RABBITMQ_WAS_RUNNING" == "false" ]]; then
     log ""
     log "Stopping RabbitMQ (it was not running before build)"
-    ./stop
+    if [[ "$DOCKER_MODE" == "true" ]]; then
+        ./stop --docker
+    else
+        ./stop
+    fi
 fi
