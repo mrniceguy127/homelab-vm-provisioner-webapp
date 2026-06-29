@@ -1,13 +1,18 @@
 # Multi-stage build for PostgreSQL + Node.js microservice
+# Stage 1: Get Node.js from official image
+FROM node:20-bookworm-slim AS node
+
+# Stage 2: Build final image with PostgreSQL + Node.js
 FROM postgres:17
 
-# Install Node.js 20.x
-RUN apt-get update && \
-    apt-get install -y curl gnupg && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# Copy Node.js and npm completely from the Node image
+COPY --from=node /usr/local/include/node /usr/local/include/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node /usr/local/bin /usr/local/bin
+COPY --from=node /opt /opt
+
+# Verify Node.js installation
+RUN node --version && npm --version
 
 # Create app directory
 WORKDIR /app

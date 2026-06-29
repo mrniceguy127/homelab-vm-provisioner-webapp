@@ -24,6 +24,17 @@ Environment variables (set in `.env`):
 - `WORKER_ID`: Unique worker identifier (default: auto-generated)
 - `PROVISIONER_CONCURRENCY`: Max concurrent jobs (default: 1)
 - `WORKER_POLL_INTERVAL`: Poll interval in seconds (default: 5.0)
+- `WORKER_DRY_RUN`: Enable dry-run mode (default: false, auto-enables if dependencies unavailable)
+
+### Dry-Run Mode
+
+The worker automatically falls back to dry-run mode when system dependencies (libvirt, nftables) are unavailable. In dry-run mode:
+- Operations are logged but not executed
+- Jobs complete successfully without making system changes
+- No sudo privileges required
+- Ideal for development without VM infrastructure
+
+Enable explicitly with `WORKER_DRY_RUN=true` or let it auto-detect missing dependencies.
 
 ## Testing
 
@@ -34,21 +45,23 @@ Environment variables (set in `.env`):
 
 ## Key Design Points
 
-- **Subprocess Execution**: Calls `vmctl` command instead of importing provisioner
+- **In-Process Execution**: Imports and calls provisioner service module directly
 - **HTTP Client**: Uses database microservice REST API (not direct PostgreSQL)
 - **Resource Locking**: Prevents conflicting concurrent operations
 - **Concurrency Support**: Thread pool for concurrent job execution
 - **Graceful Shutdown**: Waits for active jobs to complete
-- **Cannot be Dockerized**: Must run on host for libvirt access
+- **Dry-Run Mode**: Auto-detects missing dependencies and logs operations without executing
+- **Cannot be Dockerized**: Must run on host for libvirt access (or use dry-run mode)
 
 ## Module Structure
 
 ```
 hlvmp_worker/
-├── config.py         # Worker configuration from environment
-├── db_client.py      # HTTP client for database microservice
-├── executor.py       # Job executor (subprocess-based vmctl calls)
-└── worker.py         # Main daemon with event loop
+├── config.py              # Worker configuration from environment
+├── db_client.py           # HTTP client for database microservice
+├── executor.py            # Job executor (service module-based)
+├── dry_run_service_mode.py # Mock service mode for dry-run
+└── worker.py              # Main daemon with event loop
 ```
 
 ## Integration Modes

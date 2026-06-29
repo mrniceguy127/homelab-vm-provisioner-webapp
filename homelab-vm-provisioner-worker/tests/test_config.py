@@ -214,6 +214,125 @@ class TestWorkerConfig(unittest.TestCase):
         self.assertIn("api_port", repr_str)
         self.assertIn("provisioner_cli_path", repr_str)
 
+    def test_dry_run_default_false(self):
+        """Test that dry_run defaults to False."""
+        with patch("hlvmp_worker.config.Path.exists", return_value=True):
+            config = WorkerConfig(
+                database_url="postgresql://localhost/test",
+                host_id="test-host",
+                proxy_api_host="http://localhost",
+                api_port=3001,
+                provisioner_cli_path="/usr/bin/vmctl",
+            )
+
+        self.assertFalse(config.dry_run)
+
+    def test_dry_run_explicit_true(self):
+        """Test that dry_run can be explicitly enabled."""
+        with patch("hlvmp_worker.config.Path.exists", return_value=True):
+            config = WorkerConfig(
+                database_url="postgresql://localhost/test",
+                host_id="test-host",
+                proxy_api_host="http://localhost",
+                api_port=3001,
+                provisioner_cli_path="/usr/bin/vmctl",
+                dry_run=True,
+            )
+
+        self.assertTrue(config.dry_run)
+
+    @patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": "postgresql://localhost/test",
+            "HOST_ID": "env-host",
+            "PROXY_API_HOST": "http://localhost",
+            "API_PORT": "3001",
+            "WORKER_QUEUE_HOST": "localhost",
+            "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
+            "WORKER_DRY_RUN": "true",
+        },
+    )
+    @patch("hlvmp_worker.config.Path.exists", return_value=True)
+    def test_from_env_dry_run_true(self, mock_exists):
+        """Test loading dry_run=true from environment."""
+        config = WorkerConfig.from_env()
+
+        self.assertTrue(config.dry_run)
+
+    @patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": "postgresql://localhost/test",
+            "HOST_ID": "env-host",
+            "PROXY_API_HOST": "http://localhost",
+            "API_PORT": "3001",
+            "WORKER_QUEUE_HOST": "localhost",
+            "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
+            "WORKER_DRY_RUN": "1",
+        },
+    )
+    @patch("hlvmp_worker.config.Path.exists", return_value=True)
+    def test_from_env_dry_run_1(self, mock_exists):
+        """Test loading dry_run=1 from environment."""
+        config = WorkerConfig.from_env()
+
+        self.assertTrue(config.dry_run)
+
+    @patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": "postgresql://localhost/test",
+            "HOST_ID": "env-host",
+            "PROXY_API_HOST": "http://localhost",
+            "API_PORT": "3001",
+            "WORKER_QUEUE_HOST": "localhost",
+            "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
+            "WORKER_DRY_RUN": "false",
+        },
+    )
+    @patch("hlvmp_worker.config.Path.exists", return_value=True)
+    def test_from_env_dry_run_false(self, mock_exists):
+        """Test loading dry_run=false from environment."""
+        config = WorkerConfig.from_env()
+
+        self.assertFalse(config.dry_run)
+
+    @patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": "postgresql://localhost/test",
+            "HOST_ID": "env-host",
+            "PROXY_API_HOST": "http://localhost",
+            "API_PORT": "3001",
+            "WORKER_QUEUE_HOST": "localhost",
+            "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
+        },
+    )
+    @patch("hlvmp_worker.config.Path.exists", return_value=True)
+    def test_from_env_dry_run_default(self, mock_exists):
+        """Test that dry_run defaults to False when not in environment."""
+        config = WorkerConfig.from_env()
+
+        self.assertFalse(config.dry_run)
+
+    def test_repr_includes_dry_run(self):
+        """Test that __repr__ includes dry_run status."""
+        with patch("hlvmp_worker.config.Path.exists", return_value=True):
+            config = WorkerConfig(
+                database_url="postgresql://localhost/test",
+                host_id="test-host",
+                proxy_api_host="http://localhost",
+                api_port=3001,
+                worker_id="test-worker",
+                provisioner_cli_path="/test/path",
+                dry_run=True,
+            )
+
+        repr_str = repr(config)
+
+        self.assertIn("dry_run=True", repr_str)
+
 
 if __name__ == "__main__":
     unittest.main()

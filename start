@@ -186,6 +186,8 @@ elif [[ "$ENABLE_DB" == "true" && "$USE_DOCKER" == "false" ]]; then
     ensure_sudo_credentials "Starting native PostgreSQL requires sudo access. Confirm it now before services start."
 elif [[ "$ENABLE_API" == "true" && "$USE_DOCKER" == "false" ]]; then
     ensure_sudo_credentials "The API needs sudo access for libvirt operations and privileged log access. Confirm it now before the API starts in the background."
+elif [[ "$ENABLE_WORKER" == "true" ]]; then
+    ensure_sudo_credentials "The worker daemon requires sudo access for libvirt and nftables operations. Confirm it now before the worker starts in the background."
 fi
 
 # Validate prerequisites for full-stack mode
@@ -204,6 +206,14 @@ PIDS=()
 DB_CONTAINER_STARTED=false
 API_CONTAINER_STARTED=false
 PROXY_CONTAINER_STARTED=false
+QUEUE_CONTAINER_STARTED=false
+
+cleanup_queue_container() {
+    if [[ "$QUEUE_CONTAINER_STARTED" == "true" ]]; then
+        docker stop hlvmp-rabbitmq >/dev/null 2>&1 || true
+        docker rm -f hlvmp-rabbitmq >/dev/null 2>&1 || true
+    fi
+}
 
 cleanup_db_container() {
     if [[ "$DB_CONTAINER_STARTED" == "true" ]]; then
@@ -228,6 +238,7 @@ fail_startup() {
     cleanup_proxy_container
     cleanup_api_container
     cleanup_db_container
+    cleanup_queue_container
     for pid in "${PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
     done
@@ -242,6 +253,7 @@ cleanup() {
     cleanup_proxy_container
     cleanup_api_container
     cleanup_db_container
+    cleanup_queue_container
     for pid in "${PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
     done
@@ -376,7 +388,13 @@ fi
 if [[ "$ENABLE_QUEUE" == "true" ]]; then
     printf '==> Starting RabbitMQ queue service\n'
     if [[ "$USE_DOCKER" == "true" ]]; then
+        QUEUE_CONTAINER_ID_BEFORE="$(docker_container_id hlvmp-rabbitmq)"
+        QUEUE_WAS_RUNNING_BEFORE="$(docker inspect -f '{{.State.Running}}' hlvmp-rabbitmq 2>/dev/null || printf 'false')"
         "$QUEUE_DIR/start" --docker
+        QUEUE_CONTAINER_ID_AFTER="$(docker_container_id hlvmp-rabbitmq)"
+        if [[ -n "$QUEUE_CONTAINER_ID_AFTER" ]] && [[ "$QUEUE_WAS_RUNNING_BEFORE" != "true" || "$QUEUE_CONTAINER_ID_BEFORE" != "$QUEUE_CONTAINER_ID_AFTER" ]]; then
+            QUEUE_CONTAINER_STARTED=true
+        fi
     else
         "$QUEUE_DIR/start"
     fi
@@ -398,7 +416,7 @@ if [[ "$USE_DOCKER" == "true" && ( "$ENABLE_DB_SERVICE" == "true" || "$ENABLE_DB
     DB_CONTAINER_ID_BEFORE="$(docker_container_id hlvmp-db)"
     DB_WAS_RUNNING_BEFORE="$(docker inspect -f '{{.State.Running}}' hlvmp-db 2>/dev/null || printf 'false')"
     printf '==> Starting database stack in Docker\n'
-    "$DB_DIR/start" --docker
+    "$DB_DIR/start" --docker --no-follow
     DB_CONTAINER_ID_AFTER="$(docker_container_id hlvmp-db)"
     if [[ -n "$DB_CONTAINER_ID_AFTER" ]] && [[ "$DB_WAS_RUNNING_BEFORE" != "true" || "$DB_CONTAINER_ID_BEFORE" != "$DB_CONTAINER_ID_AFTER" ]]; then
         DB_CONTAINER_STARTED=true
@@ -424,7 +442,7 @@ if [[ "$ENABLE_API" == "true" ]]; then
         if [[ -z "$API_DB_SERVICE_URL" || "$API_DB_SERVICE_URL" == "http://localhost:${DB_SERVICE_PORT:-3002}" ]]; then
             API_DB_SERVICE_URL="http://172.17.0.1:${DB_SERVICE_PORT:-3002}"
         fi
-        DB_SERVICE_URL="$API_DB_SERVICE_URL" "$API_DIR/start" --docker
+        DB_SERVICE_URL="$API_DB_SERVICE_URL" "$API_DIR/start" --docker --no-follow
         API_CONTAINER_ID_AFTER="$(docker_container_id hlvmp-api)"
         if [[ -n "$API_CONTAINER_ID_AFTER" ]] && [[ "$API_WAS_RUNNING_BEFORE" != "true" || "$API_CONTAINER_ID_BEFORE" != "$API_CONTAINER_ID_AFTER" ]]; then
             API_CONTAINER_STARTED=true

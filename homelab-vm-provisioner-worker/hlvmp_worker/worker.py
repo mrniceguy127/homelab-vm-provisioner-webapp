@@ -36,12 +36,24 @@ def ensure_sudo_credentials():
     """Ensure sudo credentials are available for worker operations.
 
     The worker needs sudo to execute provisioner CLI commands that interact
-    with libvirt and nftables. This function always prompts for sudo access
-    on startup to ensure proper credentials.
+    with libvirt and nftables. This function checks if sudo credentials are
+    already cached (from parent script), and only prompts if needed.
 
     Raises:
         RuntimeError: If unable to acquire sudo credentials
     """
+    # First try non-interactive validation (credentials already cached)
+    result = subprocess.run(
+        ["sudo", "-n", "-v"],
+        capture_output=True,
+        check=False,
+    )
+
+    if result.returncode == 0:
+        logger.info("✓ Sudo credentials already available")
+        return
+
+    # Credentials not cached - need to prompt
     logger.info("=" * 70)
     logger.info("HOMELAB VM PROVISIONER WORKER")
     logger.info("=" * 70)
@@ -54,7 +66,7 @@ def ensure_sudo_credentials():
     logger.info("You will be prompted for your sudo password.")
     logger.info("=" * 70)
 
-    # Always validate sudo access on startup (prompts if needed)
+    # Prompt for sudo access
     result = subprocess.run(
         ["sudo", "-v"],
         check=False,
@@ -326,43 +338,75 @@ class WorkerDaemon:
         target_host_id = message.get("target_host_id")
 
         if not job_id:
-            logger.error(f"Message missing job_id: {message}")
+            logger.error("=" * 70)
+            logger.error(f"❌ INVALID JOB: Missing job_id in message")
+            logger.error(f"   Message: {message}")
+            logger.error("=" * 70)
             return False  # NACK invalid message
+
+        logger.info(f"📨 Received job notification: job_id={job_id}, target_host={target_host_id}")
 
         # Verify target host matches
         if target_host_id != self.config.host_id:
-            logger.warning(f"Job {job_id} targets {target_host_id}, but worker is {self.config.host_id}")
+            logger.warning("=" * 70)
+            logger.warning(f"❌ INVALID JOB: Wrong target host")
+            logger.warning(f"   Job ID: {job_id}")
+            logger.warning(f"   Expected host: {self.config.host_id}")
+            logger.warning(f"   Actual target: {target_host_id}")
+            logger.warning(f"   → Job rejected (not for this worker)")
+            logger.warning("=" * 70)
             return False  # NACK, job not for this host
 
-        logger.info(f"Processing RabbitMQ job {job_id}")
+        logger.info("=" * 70)
+        logger.info(f"✅ VALID JOB: Job {job_id} is for this worker")
+        logger.info(f"   Host ID match: {self.config.host_id}")
+        logger.info("=" * 70)
 
         try:
             # Fetch full job details from API
+            logger.info(f"Fetching job {job_id} details from API...")
             job = self._call_api("GET", f"/worker/jobs/{job_id}")
+            job_type = job.get("type", "unknown")
+            job_status = job.get("status", "unknown")
+            logger.info(f"📋 Job {job_id} details retrieved successfully:")
+            logger.info(f"   Type: {job_type}")
+            logger.info(f"   Status: {job_status}")
+            logger.info(f"   Payload: {job.get('payload', {})}")
 
             # Mark job as started
+            logger.info(f"Marking job {job_id} as started...")
             self._call_api(
                 "POST",
                 f"/worker/jobs/{job_id}/start",
                 {"worker_id": self.config.worker_id, "worker_host_id": self.config.host_id}
             )
+            logger.info(f"✓ Job {job_id} marked as started")
 
             # Process job using existing logic
+            logger.info(f"🚀 Executing job {job_id} (type: {job_type})...")
             success = self._process_job(job)
 
             if success:
-                logger.info(f"RabbitMQ job {job_id} succeeded")
+                logger.info(f"✅ RabbitMQ job {job_id} succeeded")
                 return True  # ACK message
-            logger.error(f"RabbitMQ job {job_id} failed")
+            logger.error(f"❌ RabbitMQ job {job_id} failed")
             # Job already marked as failed by _process_job, just NACK without requeue
             return False
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"API call failed for job {job_id}: {e}")
+            logger.error("=" * 70)
+            logger.error(f"❌ API ERROR: Failed to communicate with API for job {job_id}")
+            logger.error(f"   Error: {e}")
+            logger.error(f"   → Job will be requeued for retry")
+            logger.error("=" * 70)
             # Don't ACK - message will be requeued for retry
             raise
         except Exception as e:
-            logger.error(f"Unexpected error processing RabbitMQ job {job_id}: {e}", exc_info=True)
+            logger.error("=" * 70)
+            logger.error(f"❌ UNEXPECTED ERROR: Exception processing job {job_id}")
+            logger.error(f"   Error: {e}")
+            logger.error("=" * 70)
+            logger.error(f"Full error:", exc_info=True)
             try:
                 # Try to mark job as failed via API
                 self._call_api(
@@ -400,6 +444,12 @@ class WorkerDaemon:
 
         logger.info("Database microservice is healthy")
         logger.info("Starting RabbitMQ consumer mode")
+        logger.info("=" * 70)
+        logger.info(f"🎧 Worker is now listening for jobs on queue: {os.getenv('WORKER_QUEUE_NAME', 'provisioner.worker.' + self.config.host_id)}")
+        logger.info(f"   Host ID: {self.config.host_id}")
+        logger.info(f"   Worker ID: {self.config.worker_id}")
+        logger.info(f"   Concurrency: {self.config.concurrency}")
+        logger.info("=" * 70)
 
         self.running = True
 
@@ -407,8 +457,10 @@ class WorkerDaemon:
             # Create and connect RabbitMQ consumer
             self.rabbitmq_consumer = RabbitMqConsumer.from_env()
             self.rabbitmq_consumer.connect()
+            logger.info("✓ Connected to RabbitMQ successfully")
 
             # Start consuming (blocking until shutdown)
+            logger.info("⏳ Waiting for job messages...")
             self.rabbitmq_consumer.consume(
                 callback=self._process_rabbitmq_message,
                 prefetch_count=self.config.concurrency

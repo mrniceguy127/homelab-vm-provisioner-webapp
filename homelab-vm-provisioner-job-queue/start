@@ -65,23 +65,26 @@ docker_container_running() {
 }
 
 wait_for_rabbitmq() {
-    local max_attempts=30
+    local max_attempts=15
     local attempt=0
     
     log "Waiting for RabbitMQ to be ready..."
     
     while [[ $attempt -lt $max_attempts ]]; do
-        if curl -s -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
+        if curl -sf --max-time 2 -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
             "http://$QUEUE_HOST:$QUEUE_MGMT_PORT/api/overview" >/dev/null 2>&1; then
             log "RabbitMQ is ready"
             return 0
         fi
         
         attempt=$((attempt + 1))
-        sleep 1
+        printf '.' >&2
+        sleep 2
     done
+    printf '\n' >&2
     
-    printf 'Error: RabbitMQ failed to become ready after %d seconds\n' "$max_attempts" >&2
+    printf 'Error: RabbitMQ failed to become ready after %d seconds\n' "$((max_attempts * 2))" >&2
+    printf 'Check that RabbitMQ is accessible at %s:%s\n' "$QUEUE_HOST" "$QUEUE_MGMT_PORT" >&2
     return 1
 }
 
@@ -99,8 +102,8 @@ if [[ "$DOCKER_MODE" == "true" ]]; then
         log "Creating and starting RabbitMQ container"
         docker run -d \
             --name "$CONTAINER_NAME" \
-            -p "$QUEUE_PORT:$QUEUE_PORT" \
-            -p "$QUEUE_MGMT_PORT:$QUEUE_MGMT_PORT" \
+            -p "$QUEUE_PORT:5672" \
+            -p "$QUEUE_MGMT_PORT:15672" \
             -e RABBITMQ_DEFAULT_USER="$QUEUE_ADMIN_USER" \
             -e RABBITMQ_DEFAULT_PASS="$QUEUE_ADMIN_PASSWORD" \
             -v hlvmp-rabbitmq-data:/var/lib/rabbitmq \

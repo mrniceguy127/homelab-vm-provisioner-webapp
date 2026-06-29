@@ -671,6 +671,28 @@ app.post('/jobs/:id/failed', async (req, res, next) => {
   }
 });
 
+// Update job status (generic)
+app.patch('/jobs/:id/status', async (req, res, next) => {
+  try {
+    const jobId = Number.parseInt(req.params.id, 10);
+    
+    if (Number.isNaN(jobId)) {
+      return res.status(400).json({ error: 'Invalid job ID' });
+    }
+    
+    const { status, ...updates } = req.body;
+    
+    if (!status) {
+      return res.status(400).json({ error: 'Missing required field: status' });
+    }
+    
+    const job = await repository.updateJobStatus(jobId, status, updates);
+    res.json({ job });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Acquire resource locks
 app.post('/locks/acquire', async (req, res, next) => {
   try {

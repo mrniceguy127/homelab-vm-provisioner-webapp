@@ -55,12 +55,21 @@ class JobExecutor:
         Args:
             provisioner_cli_path: Path to provisioner CLI directory
             db_client: Database client for VM definitions and state
-            worker_config: Worker configuration (optional, for validation)
+            worker_config: Worker configuration (optional, for validation and dry-run mode)
         """
         self.provisioner_cli_path = Path(provisioner_cli_path)
         self.db_client = db_client
         self.worker_config = worker_config
-        self.service_mode = self._load_service_mode_module()
+        self.dry_run = worker_config.dry_run if worker_config else False
+
+        # Load appropriate service mode module (dry-run or real)
+        if self.dry_run:
+            logger.warning("Dry-run mode enabled - operations will be logged but not executed")
+            from . import dry_run_service_mode
+            self.service_mode = dry_run_service_mode
+        else:
+            self.service_mode = self._load_service_mode_module()
+
         self.validator = None
 
         # Initialize validator if worker_config is provided
@@ -82,17 +91,49 @@ class JobExecutor:
         }
 
     def _load_service_mode_module(self):
+        """Load the provisioner service mode module.
+
+        Automatically falls back to dry-run mode if dependencies are unavailable.
+
+        Returns:
+            Service mode module (real or dry-run)
+        """
         if not self.provisioner_cli_path.exists():
-            raise ValueError(f"Provisioner CLI path does not exist: {self.provisioner_cli_path}")
+            logger.warning(
+                f"Provisioner CLI path does not exist: {self.provisioner_cli_path}. "
+                "Falling back to dry-run mode."
+            )
+            from . import dry_run_service_mode
+            self.dry_run = True
+            return dry_run_service_mode
 
         try:
             module_root = str(self.provisioner_cli_path.resolve())
             if module_root not in sys.path:
                 sys.path.insert(0, module_root)
-            return import_module("homelab_vm_provisioner.service_mode")
+            service_module = import_module("homelab_vm_provisioner.service_mode")
+            logger.info("Provisioner service module loaded successfully")
+            return service_module
         except ModuleNotFoundError as e:
+            logger.warning(
+                f"Could not import provisioner service module: {e}. "
+                "Falling back to dry-run mode."
+            )
+            from . import dry_run_service_mode
+            self.dry_run = True
+            return dry_run_service_mode
+        except ImportError as e:
+            # Catch libvirt or other dependency import errors
+            if "libvirt" in str(e).lower() or "nftables" in str(e).lower():
+                logger.warning(
+                    f"System dependencies unavailable: {e}. "
+                    "Falling back to dry-run mode."
+                )
+                from . import dry_run_service_mode
+                self.dry_run = True
+                return dry_run_service_mode
             raise JobExecutionError(
-                f"Could not import provisioner service module: {e}",
+                f"Failed to import provisioner service module: {e}",
                 retriable=False
             ) from e
         except Exception as e:

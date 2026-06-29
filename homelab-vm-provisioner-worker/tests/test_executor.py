@@ -9,15 +9,18 @@ from hlvmp_worker.executor import JobExecutionError, JobExecutor, JobValidationE
 class TestJobExecutor(unittest.TestCase):
     """Test job executor for provisioner operations."""
 
-    def test_init_raises_when_cli_path_missing(self):
-        """Test executor initialization fails without provisioner path."""
+    def test_init_falls_back_to_dry_run_when_cli_path_missing(self):
+        """Test executor falls back to dry-run when provisioner path is missing."""
         with (
             patch("hlvmp_worker.executor.Path.exists", return_value=False),
-            self.assertRaises(ValueError) as context,
+            patch("hlvmp_worker.executor.logger") as mock_logger,
         ):
-            JobExecutor("/fake/path/to/cli", Mock(), worker_config=None)
+            executor = JobExecutor("/fake/path/to/cli", Mock(), worker_config=None)
 
-        self.assertIn("does not exist", str(context.exception))
+        # Should fallback to dry-run mode instead of raising
+        self.assertTrue(executor.dry_run)
+        mock_logger.warning.assert_called()
+        self.assertIn("does not exist", mock_logger.warning.call_args[0][0])
 
     def setUp(self):
         """Set up test fixtures."""
@@ -137,14 +140,19 @@ class TestJobExecutor(unittest.TestCase):
 
         self.assertEqual(locks, ["host:host1"])
 
-    def test_load_service_mode_module_missing_package_raises_job_execution_error(self):
-        with patch("hlvmp_worker.executor.Path.exists", return_value=True), patch(
-            "hlvmp_worker.executor.import_module", side_effect=ModuleNotFoundError("missing")
-        ), self.assertRaises(JobExecutionError) as context:
-            JobExecutor("/fake/path/to/cli", Mock(), worker_config=None)
+    def test_load_service_mode_module_missing_package_falls_back_to_dry_run(self):
+        """Test executor falls back to dry-run when provisioner module is missing."""
+        with (
+            patch("hlvmp_worker.executor.Path.exists", return_value=True),
+            patch("hlvmp_worker.executor.import_module", side_effect=ModuleNotFoundError("missing")),
+            patch("hlvmp_worker.executor.logger") as mock_logger,
+        ):
+            executor = JobExecutor("/fake/path/to/cli", Mock(), worker_config=None)
 
-        self.assertIn("Could not import provisioner service module", str(context.exception))
-        self.assertFalse(context.exception.retriable)
+        # Should fallback to dry-run mode instead of raising
+        self.assertTrue(executor.dry_run)
+        mock_logger.warning.assert_called()
+        self.assertIn("Could not import", mock_logger.warning.call_args[0][0])
 
     def test_execute_provision_vm_success(self):
         """Test successful VM provision execution."""
@@ -524,6 +532,7 @@ class TestJobExecutorWithValidation(unittest.TestCase):
         self.service_mode = Mock()
         self.worker_config = Mock()
         self.worker_config.host_id = "test-host"
+        self.worker_config.dry_run = False  # Ensure dry-run is explicitly disabled
 
         self.service_mode.create_vm.return_value = {"state": {"vm_name": "test-vm"}}
         self.service_mode.refresh_vm_runtime_state.return_value = {
@@ -629,6 +638,91 @@ class TestJobExecutorWithValidation(unittest.TestCase):
         self.assertFalse(result.get("noop", False))
         # Should have called service_mode.create_vm
         self.service_mode.create_vm.assert_called_once()
+
+    def test_dry_run_mode_enabled_explicitly(self):
+        """Test executor in dry-run mode with explicit configuration."""
+        worker_config = Mock()
+        worker_config.dry_run = True
+
+        with patch("hlvmp_worker.executor.Path.exists", return_value=True):
+            executor = JobExecutor("/fake/path/to/cli", self.db_client, worker_config=worker_config)
+
+        # Verify dry-run mode is enabled
+        self.assertTrue(executor.dry_run)
+        # Verify dry_run_service_mode is loaded
+        self.assertEqual(executor.service_mode.__name__, "hlvmp_worker.dry_run_service_mode")
+
+    def test_dry_run_mode_fallback_on_missing_path(self):
+        """Test automatic fallback to dry-run when provisioner path is missing."""
+        worker_config = Mock()
+        worker_config.dry_run = False
+
+        with (
+            patch("hlvmp_worker.executor.Path.exists", return_value=False),
+            patch("hlvmp_worker.executor.logger") as mock_logger,
+        ):
+            executor = JobExecutor("/fake/path/to/cli", self.db_client, worker_config=worker_config)
+
+        # Verify automatic fallback to dry-run mode
+        self.assertTrue(executor.dry_run)
+        # Verify warning was logged
+        mock_logger.warning.assert_called()
+        self.assertIn("does not exist", mock_logger.warning.call_args[0][0])
+
+    def test_dry_run_mode_fallback_on_import_error(self):
+        """Test automatic fallback to dry-run when libvirt dependencies are missing."""
+        worker_config = Mock()
+        worker_config.dry_run = False
+
+        def raise_import_error(*args, **kwargs):
+            raise ImportError("No module named 'libvirt'")
+
+        with (
+            patch("hlvmp_worker.executor.Path.exists", return_value=True),
+            patch("hlvmp_worker.executor.import_module", side_effect=raise_import_error),
+            patch("hlvmp_worker.executor.logger") as mock_logger,
+        ):
+            executor = JobExecutor("/fake/path/to/cli", self.db_client, worker_config=worker_config)
+
+        # Verify automatic fallback to dry-run mode
+        self.assertTrue(executor.dry_run)
+        # Verify warning was logged
+        mock_logger.warning.assert_called()
+        self.assertIn("dependencies unavailable", mock_logger.warning.call_args[0][0])
+
+    def test_dry_run_mode_provision_vm(self):
+        """Test VM provisioning in dry-run mode."""
+        worker_config = Mock()
+        worker_config.dry_run = True
+        worker_config.host_id = "test-host"  # Match the job's targetHostId
+
+        with patch("hlvmp_worker.executor.Path.exists", return_value=True):
+            executor = JobExecutor("/fake/path/to/cli", self.db_client, worker_config=worker_config)
+
+        self.db_client.get_vm_definition_by_name.return_value = {
+            "id": 42,
+            "vm_name": "test-vm",
+            "config": {
+                "vm": {"name": "test-vm", "user": "tester"},
+            },
+        }
+        self.db_client.list_vm_definitions.return_value = []
+        self.db_client.list_vm_runtime_states.return_value = []
+        self.db_client.list_network_groups.return_value = []
+
+        job = {
+            "id": 123,
+            "type": "provision_vm",
+            "payload": {"vmName": "test-vm"},
+            "targetHostId": "test-host",
+            "targetVmId": "test-vm",
+        }
+
+        result = executor.execute_job(job)
+
+        # Verify dry-run success
+        self.assertTrue(result["success"])
+        self.assertIn("test-vm", result.get("vmName", ""))
 
 
 if __name__ == "__main__":

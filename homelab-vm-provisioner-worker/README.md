@@ -44,6 +44,36 @@ The worker reads configuration from environment variables:
 | `WORKER_ID` | No | auto-generated | Unique worker identifier (hostname-PID) |
 | `PROVISIONER_CONCURRENCY` | No | 1 | Maximum concurrent jobs |
 | `WORKER_POLL_INTERVAL` | No | 5.0 | Poll interval in seconds |
+| `WORKER_DRY_RUN` | No | false | Enable dry-run mode (log commands without executing) |
+
+### Dry-Run Mode
+
+The worker supports a dry-run mode for development environments without libvirt or system dependencies. In dry-run mode:
+
+- All operations are logged but not executed
+- Jobs report success without making actual system changes
+- Mock runtime state is returned for VM queries
+- No sudo privileges are required
+
+**Enabling Dry-Run Mode:**
+
+1. **Explicitly**: Set `WORKER_DRY_RUN=true` in `.env`
+2. **Automatically**: Worker falls back to dry-run if:
+   - Provisioner CLI path doesn't exist
+   - Provisioner module can't be imported
+   - libvirt or nftables dependencies are unavailable
+
+This mode is ideal for:
+- Developing API/client features without VM infrastructure
+- Testing job queue and worker orchestration logic
+- Running the full stack on machines without virtualization support
+
+**Example dry-run output:**
+```
+[DRY-RUN] Would create VM: test-vm
+[DRY-RUN] Would reconcile networking for 3 VMs
+[DRY-RUN] Would start VM: test-vm
+```
 
 ### Monorepo Configuration
 

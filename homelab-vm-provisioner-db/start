@@ -12,11 +12,15 @@ fi
 
 # Parse arguments
 DOCKER_MODE=false
+FOLLOW_LOGS=true
 
 for arg in "$@"; do
     case "$arg" in
         --docker)
             DOCKER_MODE=true
+            ;;
+        --no-follow)
+            FOLLOW_LOGS=false
             ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
@@ -24,8 +28,9 @@ for arg in "$@"; do
             echo "Start PostgreSQL database."
             echo ""
             echo "Options:"
-            echo "  --docker    Start PostgreSQL in Docker"
-            echo "  --help      Show this help message"
+            echo "  --docker      Start PostgreSQL in Docker"
+            echo "  --no-follow   Don't follow logs (for orchestrated startup)"
+            echo "  --help        Show this help message"
             echo ""
             echo "Default: Start native PostgreSQL service"
             exit 0
@@ -256,14 +261,25 @@ if [[ "$DOCKER_MODE" == true ]]; then
     log ""
     log "Migrations run automatically on container startup."
     log ""
-    log "Check logs:"
-    log "  docker logs hlvmp-db"
-    log ""
-    log "Check health:"
-    log "  curl http://localhost:$DB_SERVICE_PORT/health"
-    log ""
-    log "Stop container:"
-    log "  docker stop hlvmp-db"
+    if [[ "$FOLLOW_LOGS" == "true" ]]; then
+        log "Following container logs (Ctrl+C to exit)..."
+        log ""
+        
+        # Cleanup handler
+        cleanup() {
+            log ""
+            log "Container still running in background"
+            log "  View logs: docker logs -f hlvmp-db"
+            log "  Stop: docker stop hlvmp-db"
+        }
+        trap cleanup EXIT INT TERM
+        
+        docker logs -f --tail 50 hlvmp-db
+    else
+        log "Container started successfully"
+        log "  View logs: docker logs -f hlvmp-db"
+        log "  Stop: docker stop hlvmp-db"
+    fi
 else
     # Native mode
     ensure_sudo_credentials "Starting native PostgreSQL requires sudo access. Confirm it now before the service manager command runs."

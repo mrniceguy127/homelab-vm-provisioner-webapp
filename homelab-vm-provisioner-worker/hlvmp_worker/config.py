@@ -24,6 +24,7 @@ class WorkerConfig:
         db_service_url: Optional[str] = None,
         db_service_password: Optional[str] = None,
         provisioner_cli_path: Optional[str] = None,
+        dry_run: bool = False,
     ):
         """Initialize worker configuration.
 
@@ -38,6 +39,7 @@ class WorkerConfig:
             db_service_url: Database microservice URL (preferred)
             db_service_password: Database microservice password
             provisioner_cli_path: Path to provisioner CLI (None = use PATH)
+            dry_run: Enable dry-run mode (log commands without executing)
         """
         self.database_url = database_url
         self.host_id = host_id
@@ -50,6 +52,7 @@ class WorkerConfig:
         self.db_service_url = db_service_url
         self.db_service_password = db_service_password
         self.provisioner_cli_path = self._resolve_provisioner_path(provisioner_cli_path)
+        self.dry_run = dry_run
 
     def _generate_worker_id(self) -> str:
         """Generate a stable worker ID based on hostname and PID.
@@ -102,6 +105,7 @@ class WorkerConfig:
             PROVISIONER_CONCURRENCY: Max concurrent jobs (default: 1)
             WORKER_STATE_REFRESH_INTERVAL: Runtime-state refresh interval in seconds (default: 60.0)
             PROVISIONER_CLI_PATH: Path to provisioner CLI (optional)
+            WORKER_DRY_RUN: Enable dry-run mode (true/false, default: false)
 
         Returns:
             WorkerConfig instance
@@ -147,6 +151,7 @@ class WorkerConfig:
         concurrency = int(os.environ.get("PROVISIONER_CONCURRENCY", "1"))
         state_refresh_interval = float(os.environ.get("WORKER_STATE_REFRESH_INTERVAL", "60.0"))
         provisioner_cli_path = os.environ.get("PROVISIONER_CLI_PATH", None)
+        dry_run = os.environ.get("WORKER_DRY_RUN", "false").lower() in ("true", "1", "yes")
 
         return cls(
             database_url=database_url,
@@ -159,6 +164,7 @@ class WorkerConfig:
             db_service_url=db_service_url,
             db_service_password=db_service_password,
             provisioner_cli_path=provisioner_cli_path,
+            dry_run=dry_run,
         )
 
     def __repr__(self) -> str:
@@ -168,5 +174,6 @@ class WorkerConfig:
             f"worker_id={self.worker_id!r}, concurrency={self.concurrency}, "
             f"state_refresh_interval={self.state_refresh_interval}, "
             f"proxy_api_host={self.proxy_api_host!r}, api_port={self.api_port}, "
-            f"provisioner_cli_path={self.provisioner_cli_path!r})"
+            f"provisioner_cli_path={self.provisioner_cli_path!r}, "
+            f"dry_run={self.dry_run})"
         )
