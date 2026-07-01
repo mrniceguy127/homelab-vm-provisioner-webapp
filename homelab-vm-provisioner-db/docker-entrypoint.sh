@@ -36,15 +36,24 @@ if [ ! -s "$PGDATA/PG_VERSION" ]; then
     gosu postgres initdb -D "$PGDATA" -U "$PGUSER" --pwfile="$PWFILE"
 
     rm -f "$PWFILE"
+fi
 
-    cat >> "$PGDATA/pg_hba.conf" <<EOF
-host all all 127.0.0.1/32 md5
-host all all 0.0.0.0/0 md5
-local all all md5
-EOF
+# Ensure network access configuration on every startup so existing data
+# volumes created by older images self-heal (idempotent).
+echo "==> Ensuring PostgreSQL access configuration..."
 
+if ! grep -qE "^[[:space:]]*listen_addresses[[:space:]]*=[[:space:]]*'\*'" "$PGDATA/postgresql.conf"; then
     echo "listen_addresses = '*'" >> "$PGDATA/postgresql.conf"
 fi
+
+ensure_hba_line() {
+    grep -qF "$1" "$PGDATA/pg_hba.conf" || echo "$1" >> "$PGDATA/pg_hba.conf"
+}
+ensure_hba_line "host all all 127.0.0.1/32 md5"
+ensure_hba_line "host all all 0.0.0.0/0 md5"
+ensure_hba_line "local all all md5"
+
+chown postgres:postgres "$PGDATA/pg_hba.conf" "$PGDATA/postgresql.conf"
 
 # Start PostgreSQL in the background as the postgres user
 echo "==> Starting PostgreSQL server..."
