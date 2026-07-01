@@ -6,8 +6,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$SCRIPT_DIR"
 
 # Parse arguments
 if [[ "${1:-}" == "--help" ]]; then
@@ -29,27 +27,36 @@ if [[ "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-# Load workspace .env first, then allow component .env to override it
-if [[ -f "$WORKSPACE_ROOT/.env" ]]; then
+# Load .env from parent directory if it exists (monorepo support)
+if [[ -f "$SCRIPT_DIR/../.env" ]]; then
   set -a
-  source "$WORKSPACE_ROOT/.env"
+  source "$SCRIPT_DIR/../.env"
   set +a
 fi
 
-if [[ -f .env ]]; then
+# Load component .env (overrides parent)
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
   set -a
-  source .env
+  source "$SCRIPT_DIR/.env"
   set +a
 fi
 
-# Resolve monorepo-relative provisioner path for direct worker runs
+# Resolve monorepo-relative provisioner path
 if [[ -n "${PROVISIONER_CLI_PATH:-}" && "${PROVISIONER_CLI_PATH}" != /* ]]; then
-  PROVISIONER_CLI_PATH="$WORKSPACE_ROOT/$PROVISIONER_CLI_PATH"
+  # Relative path - try parent directory first (monorepo), then current
+  if [[ -d "$SCRIPT_DIR/../$PROVISIONER_CLI_PATH" ]]; then
+    PROVISIONER_CLI_PATH="$(cd "$SCRIPT_DIR/../$PROVISIONER_CLI_PATH" && pwd)"
+  elif [[ -d "$SCRIPT_DIR/$PROVISIONER_CLI_PATH" ]]; then
+    PROVISIONER_CLI_PATH="$(cd "$SCRIPT_DIR/$PROVISIONER_CLI_PATH" && pwd)"
+  fi
   export PROVISIONER_CLI_PATH
 fi
 
 if [[ -n "${PROVISIONER_DATA_DIR:-}" && "${PROVISIONER_DATA_DIR}" != /* ]]; then
-  PROVISIONER_DATA_DIR="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[2], sys.argv[1]))' "$PROVISIONER_CLI_PATH" "$WORKSPACE_ROOT/$PROVISIONER_DATA_DIR")"
+  # Resolve relative to parent directory if in monorepo
+  if [[ -d "$SCRIPT_DIR/../$PROVISIONER_DATA_DIR" ]]; then
+    PROVISIONER_DATA_DIR="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[2], sys.argv[1]))' "$PROVISIONER_CLI_PATH" "$SCRIPT_DIR/../$PROVISIONER_DATA_DIR")"
+  fi
   export PROVISIONER_DATA_DIR
 fi
 
@@ -73,7 +80,7 @@ if [[ -z "${DB_SERVICE_PASSWORD:-}" ]]; then
 fi
 
 # Activate virtual environment
-VENV_DIR=".venv"
+VENV_DIR="$SCRIPT_DIR/.venv"
 if [[ ! -d "$VENV_DIR" ]]; then
   echo "Error: Virtual environment not found at $VENV_DIR"
   echo "Run ./setup first to initialize the environment"

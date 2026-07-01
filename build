@@ -2,6 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source shared library
+source "$ROOT_DIR/scripts/lib.sh"
+
+# Component directories
 API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
@@ -10,11 +15,7 @@ QUEUE_DIR="$ROOT_DIR/homelab-vm-provisioner-job-queue"
 PROXY_PUBLIC_DIR="$PROXY_DIR/public"
 
 # Source .env file if it exists
-if [[ -f "$ROOT_DIR/.env" ]]; then
-    set -a
-    source "$ROOT_DIR/.env"
-    set +a
-fi
+source_env "$ROOT_DIR/.env"
 
 # Build mode defaults (can be overridden by .env)
 ENABLE_CLIENT="${ENABLE_CLIENT:-true}"
@@ -24,12 +25,12 @@ ENABLE_DB="${ENABLE_DB:-true}"
 ENABLE_QUEUE="${ENABLE_QUEUE:-true}"
 
 # Parse arguments
-USE_DOCKER=false
+DOCKER_MODE=false
 BUILD_ARGS=()
+
 for arg in "$@"; do
     case "$arg" in
         --client-only)
-            # Legacy flag support - sets mode flags
             ENABLE_CLIENT=true
             ENABLE_API=false
             ENABLE_DB_SERVICE=false
@@ -37,8 +38,19 @@ for arg in "$@"; do
             ENABLE_DB=false
             ;;
         --docker)
-            USE_DOCKER=true
+            DOCKER_MODE=true
             BUILD_ARGS+=("$arg")
+            ;;
+        --help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Build all workspace components."
+            echo ""
+            echo "Options:"
+            echo "  --client-only    Build only client and proxy"
+            echo "  --docker         Build with Docker"
+            echo "  --help           Show this help message"
+            exit 0
             ;;
         *)
             BUILD_ARGS+=("$arg")
@@ -46,51 +58,30 @@ for arg in "$@"; do
     esac
 done
 
-log() {
-    printf '==> %s\n' "$*"
-}
-
 # Display enabled services
-log "Build mode configuration:"
+log "Build configuration:"
 log "  CLIENT:      $ENABLE_CLIENT"
 log "  API:         $ENABLE_API"
 log "  DB_SERVICE:  $ENABLE_DB_SERVICE"
 log "  QUEUE:       $ENABLE_QUEUE"
 log "  DB:          $ENABLE_DB"
-log ""
+echo ""
 
 # Build components
-if [[ "$ENABLE_DB" == "true" || "$ENABLE_DB_SERVICE" == "true" ]]; then
-    log "Building database"
-    "$DB_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
-fi
-
-if [[ "$ENABLE_QUEUE" == "true" ]]; then
-    log "Building job queue"
-    "$QUEUE_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
-fi
-
-if [[ "$ENABLE_API" == "true" ]]; then
-    log "Building API"
-    "$API_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
-fi
+[[ "$ENABLE_DB" == "true" || "$ENABLE_DB_SERVICE" == "true" ]] && log "Building database" && "$DB_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
+[[ "$ENABLE_QUEUE" == "true" ]] && log "Building job queue" && "$QUEUE_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
+[[ "$ENABLE_API" == "true" ]] && log "Building API" && "$API_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
 
 if [[ "$ENABLE_CLIENT" == "true" ]]; then
     log "Building client"
     "$CLIENT_DIR/build" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
 
-    # Wire up client artifacts to proxy
     log "Deploying client artifacts to proxy"
     rm -rf "$PROXY_PUBLIC_DIR"
     mkdir -p "$PROXY_PUBLIC_DIR"
     cp -R "$CLIENT_DIR/dist/." "$PROXY_PUBLIC_DIR/"
-    log "Client files deployed to: $PROXY_PUBLIC_DIR"
-
-    # Build proxy Docker image if in Docker mode
-    if [[ "$USE_DOCKER" == "true" ]]; then
-        log "Building proxy Docker image"
-        "$PROXY_DIR/build" --docker
-    fi
+    
+    [[ "$DOCKER_MODE" == "true" ]] && log "Building proxy Docker image" && "$PROXY_DIR/build" --docker
 fi
 
-log "Workspace build complete"
+log "Build complete"

@@ -2,27 +2,27 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source shared library
+source "$ROOT_DIR/scripts/lib.sh"
+
+# Component directories
 API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
 DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
 WORKER_DIR="$ROOT_DIR/homelab-vm-provisioner-worker"
 QUEUE_DIR="$ROOT_DIR/homelab-vm-provisioner-job-queue"
+
 PROVISIONER_CLI_PATH="${PROVISIONER_CLI_PATH:-homelab-vm-provisioner-cli}"
 if [[ "$PROVISIONER_CLI_PATH" != /* ]]; then
     PROVISIONER_DIR="$ROOT_DIR/$PROVISIONER_CLI_PATH"
 else
     PROVISIONER_DIR="$PROVISIONER_CLI_PATH"
 fi
-PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$PROVISIONER_DIR/.venv}"
-INSTALL_DEV=false
 
-# Source .env file if it exists (sets build mode flags)
-if [[ -f "$ROOT_DIR/.env" ]]; then
-    set -a
-    source "$ROOT_DIR/.env"
-    set +a
-fi
+# Source .env file if it exists
+source_env "$ROOT_DIR/.env"
 
 # Build mode defaults (can be overridden by .env)
 ENABLE_CLIENT="${ENABLE_CLIENT:-true}"
@@ -33,13 +33,16 @@ ENABLE_WORKER="${ENABLE_WORKER:-true}"
 ENABLE_QUEUE="${ENABLE_QUEUE:-true}"
 
 # Parse arguments
-USE_DOCKER=false
+INSTALL_DEV=false
 SKIP_SYSTEM_PACKAGES=false
+DOCKER_MODE=false
 SETUP_ARGS=()
+
 for arg in "$@"; do
     case "$arg" in
         --docker)
-            USE_DOCKER=true
+            DOCKER_MODE=true
+            SETUP_ARGS+=("$arg")
             ;;
         --dev)
             INSTALL_DEV=true
@@ -50,7 +53,6 @@ for arg in "$@"; do
             SETUP_ARGS+=("$arg")
             ;;
         --client-only)
-            # Legacy flag support - sets mode flags
             ENABLE_CLIENT=true
             ENABLE_API=false
             ENABLE_DB_SERVICE=false
@@ -58,101 +60,55 @@ for arg in "$@"; do
             ENABLE_QUEUE=false
             ENABLE_WORKER=false
             ;;
+        --help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Setup the entire monorepo workspace."
+            echo ""
+            echo "Options:"
+            echo "  --docker                 Setup for Docker mode"
+            echo "  --dev                    Install development dependencies"
+            echo "  --skip-system-packages   Skip system package installation"
+            echo "  --client-only            Setup only client and proxy"
+            echo "  --help                   Show this help message"
+            exit 0
+            ;;
         *)
             SETUP_ARGS+=("$arg")
             ;;
     esac
 done
 
-log() {
-    printf '==> %s\n' "$*"
-}
-
-ensure_sudo_credentials() {
-    local reason="$1"
-
-    if [[ "${EUID}" -eq 0 ]]; then
-        return
-    fi
-
-    if ! command -v sudo >/dev/null 2>&1; then
-        printf 'sudo is required for this setup step but is not installed.\n' >&2
-        exit 1
-    fi
-
-    if sudo -n -v >/dev/null 2>&1; then
-        return
-    fi
-
-    if [[ ! -t 0 || ! -t 1 ]]; then
-        printf '%s\n' "$reason" >&2
-        printf 'Run this script from an interactive terminal or pre-authorize sudo with `sudo -v` first.\n' >&2
-        exit 1
-    fi
-
-    log "$reason"
-    sudo -v
-}
-
-require_cmd() {
-    if ! command -v "$1" >/dev/null 2>&1; then
-        printf 'Missing command: %s\n' "$1" >&2
-        printf 'Please run component setup scripts to install dependencies\n' >&2
-        exit 1
-    fi
-}
-
-require_path() {
-    if [[ ! -e "$1" ]]; then
-        printf 'Missing required path: %s\n' "$1" >&2
-        exit 1
-    fi
-}
-
 # Display enabled services
-log "Build mode configuration:"
+log "Setup configuration:"
 log "  WORKER:      $ENABLE_WORKER"
 log "  CLIENT:      $ENABLE_CLIENT"
 log "  API:         $ENABLE_API"
 log "  DB_SERVICE:  $ENABLE_DB_SERVICE"
 log "  QUEUE:       $ENABLE_QUEUE"
 log "  DB:          $ENABLE_DB"
-log ""
+echo ""
 
 # Check required paths based on enabled services
-if [[ "$ENABLE_CLIENT" == "true" ]]; then
-    require_path "$CLIENT_DIR"
-    require_path "$PROXY_DIR"
-fi
-
-if [[ "$ENABLE_API" == "true" ]]; then
-    require_path "$API_DIR"
-    require_path "$PROVISIONER_DIR"
-    require_path "$PROVISIONER_DIR/setup"
-fi
-
-if [[ "$ENABLE_DB_SERVICE" == "true" || "$ENABLE_DB" == "true" ]]; then
-    require_path "$DB_DIR"
-fi
+[[ "$ENABLE_CLIENT" == "true" ]] && require_path "$CLIENT_DIR" && require_path "$PROXY_DIR"
+[[ "$ENABLE_API" == "true" ]] && require_path "$API_DIR" && require_path "$PROVISIONER_DIR"
+[[ "$ENABLE_DB_SERVICE" == "true" || "$ENABLE_DB" == "true" ]] && require_path "$DB_DIR"
+[[ "$ENABLE_WORKER" == "true" ]] && require_path "$WORKER_DIR"
 
 # Check for git (required for submodule initialization)
 require_cmd git
 
-if [[ "$SKIP_SYSTEM_PACKAGES" == "false" ]] && [[ "$ENABLE_CLIENT" == "true" || "$ENABLE_API" == "true" || "$ENABLE_DB" == "true" || "$ENABLE_DB_SERVICE" == "true" || "$ENABLE_WORKER" == "true" ]]; then
-    ensure_sudo_credentials "System package installation requires sudo access. Confirm it once now so component setup can continue cleanly."
+# Request sudo once upfront if system packages will be installed
+if [[ "$SKIP_SYSTEM_PACKAGES" == "false" ]]; then
+    ensure_sudo_once "System package installation requires sudo. Confirm once now."
 fi
 
-# Initialize git submodules based on enabled services
+# Initialize git submodules if needed
 SUBMODULES_TO_INIT=()
-if [[ "$ENABLE_API" == "true" ]]; then
-    SUBMODULES_TO_INIT+=("$API_DIR")
-fi
-if [[ "$ENABLE_CLIENT" == "true" ]]; then
-    SUBMODULES_TO_INIT+=("$CLIENT_DIR")
-fi
+[[ "$ENABLE_API" == "true" ]] && SUBMODULES_TO_INIT+=("$API_DIR")
+[[ "$ENABLE_CLIENT" == "true" ]] && SUBMODULES_TO_INIT+=("$CLIENT_DIR")
 
 if [[ ${#SUBMODULES_TO_INIT[@]} -gt 0 ]]; then
-    # Check if any required submodules are missing
     NEEDS_INIT=false
     for submodule in "${SUBMODULES_TO_INIT[@]}"; do
         if [[ ! -e "$submodule/.git" ]]; then
@@ -164,49 +120,30 @@ if [[ ${#SUBMODULES_TO_INIT[@]} -gt 0 ]]; then
     if [[ "$NEEDS_INIT" == "true" ]]; then
         log "Initializing git submodules"
         git -C "$ROOT_DIR" submodule update --init --recursive
-    else
-        log "Git submodules already initialized; preserving local changes"
     fi
 fi
 
-# Setup components using their own setup scripts
-if [[ "$ENABLE_DB" == "true" || "$ENABLE_DB_SERVICE" == "true" ]]; then
-    log "Setting up database"
-    "$DB_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
-fi
-if [[ "$ENABLE_QUEUE" == "true" ]]; then
-    log "Setting up job queue"
-    "$QUEUE_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
-fi
+# Setup components
+[[ "$ENABLE_DB" == "true" || "$ENABLE_DB_SERVICE" == "true" ]] && log "Setting up database" && "$DB_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
+[[ "$ENABLE_QUEUE" == "true" ]] && log "Setting up job queue" && "$QUEUE_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
+[[ "$ENABLE_API" == "true" ]] && log "Setting up API" && "$API_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 
-if [[ "$ENABLE_API" == "true" ]]; then
-    log "Setting up API and provisioner"
-    "$API_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
-fi
-
+# Worker doesn't have --docker mode, filter it out
 if [[ "$ENABLE_WORKER" == "true" ]]; then
-    log "Setting up worker daemon"
-    "$WORKER_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
+    log "Setting up worker"
+    WORKER_ARGS=()
+    for arg in ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}; do
+        [[ "$arg" != "--docker" ]] && WORKER_ARGS+=("$arg")
+    done
+    "$WORKER_DIR/setup" ${WORKER_ARGS[@]+"${WORKER_ARGS[@]}"}
 fi
 
-# Setup client
 if [[ "$ENABLE_CLIENT" == "true" ]]; then
     log "Setting up client"
-    if [[ "$USE_DOCKER" == "true" && "$INSTALL_DEV" == "false" ]]; then
-        "$CLIENT_DIR/setup" --skip-npm --skip-playwright ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
-    else
-        "$CLIENT_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
-    fi
-fi
-
-# Setup proxy
-if [[ "$ENABLE_CLIENT" == "true" ]]; then
+    [[ "$DOCKER_MODE" == "true" && "$INSTALL_DEV" == "false" ]] && "$CLIENT_DIR/setup" --skip-npm --skip-playwright ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"} || "$CLIENT_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
+    
     log "Setting up proxy"
-    if [[ "$USE_DOCKER" == "true" && "$INSTALL_DEV" == "false" ]]; then
-        "$PROXY_DIR/setup" --skip-npm ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
-    else
-        "$PROXY_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
-    fi
+    [[ "$DOCKER_MODE" == "true" && "$INSTALL_DEV" == "false" ]] && "$PROXY_DIR/setup" --skip-npm ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"} || "$PROXY_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 fi
 
 log "Setup complete"

@@ -1,210 +1,99 @@
 #!/usr/bin/env bash
-# Setup script for homelab-vm-provisioner-worker
-#
-# Usage: ./setup [--skip-system-packages] [--dev]
-
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$SCRIPT_DIR"
 
-# Source component .env (parent vars inherited through execution sequence)
-if [[ -f "$SCRIPT_DIR/.env" ]]; then
-    set -a
-    source "$SCRIPT_DIR/.env"
-    set +a
-fi
+# Source component library
+source "$SCRIPT_DIR/scripts/lib.sh"
 
-# Determine provisioner CLI path
+# Source .env
+source_env "$SCRIPT_DIR/.env"
+
+# Determine provisioner CLI path (supports monorepo and standalone)
 PROVISIONER_CLI_PATH="${PROVISIONER_CLI_PATH:-homelab-vm-provisioner-cli}"
 if [[ "$PROVISIONER_CLI_PATH" != /* ]]; then
-    PROVISIONER_DIR="$WORKSPACE_ROOT/$PROVISIONER_CLI_PATH"
+    # Relative path - try parent directory first (monorepo), then current
+    if [[ -d "$SCRIPT_DIR/../$PROVISIONER_CLI_PATH" ]]; then
+        PROVISIONER_DIR="$SCRIPT_DIR/../$PROVISIONER_CLI_PATH"
+    else
+        PROVISIONER_DIR="$SCRIPT_DIR/$PROVISIONER_CLI_PATH"
+    fi
 else
     PROVISIONER_DIR="$PROVISIONER_CLI_PATH"
 fi
-
 PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$PROVISIONER_DIR/.venv}"
 
 # Parse arguments
-SKIP_SYSTEM_PACKAGES=0
-INSTALL_DEV=0
+SKIP_SYSTEM_PACKAGES=false
+INSTALL_DEV=false
 PROVISIONER_ARGS=()
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --skip-system-packages)
-      SKIP_SYSTEM_PACKAGES=1
-      PROVISIONER_ARGS+=("$1")
-      shift
-      ;;
-    --dev)
-      INSTALL_DEV=1
-      PROVISIONER_ARGS+=("$1")
-      shift
-      ;;
-    --help)
-      echo "Usage: $0 [--skip-system-packages] [--dev]"
-      echo ""
-      echo "Options:"
-      echo "  --skip-system-packages  Skip system package installation"
-      echo "  --dev                   Install development dependencies"
-      echo ""
-      echo "Environment variables:"
-      echo "  PROVISIONER_CLI_PATH    Path to provisioner CLI (default: ../homelab-vm-provisioner-cli)"
-      echo "  PROVISIONER_VENV_DIR    Provisioner virtualenv path (default: \$PROVISIONER_CLI_PATH/.venv)"
-      exit 0
-      ;;
-    *)
-      echo "Unknown option: $1"
-      echo "Use --help for usage information"
-      exit 1
-      ;;
-  esac
+for arg in "$@"; do
+    case "$arg" in
+        --skip-system-packages) SKIP_SYSTEM_PACKAGES=true; PROVISIONER_ARGS+=("$arg") ;;
+        --dev) INSTALL_DEV=true; PROVISIONER_ARGS+=("$arg") ;;
+        --help)
+            cat <<EOF
+Usage: $0 [OPTIONS]
+
+Setup the worker daemon environment.
+
+Options:
+  --skip-system-packages  Skip system package installation
+  --dev                   Install development dependencies
+  --help                  Show this help message
+
+Environment variables:
+  PROVISIONER_CLI_PATH    Path to provisioner CLI (default: ../homelab-vm-provisioner-cli)
+  PROVISIONER_VENV_DIR    Provisioner virtualenv path (default: \$PROVISIONER_CLI_PATH/.venv)
+EOF
+            exit 0
+            ;;
+        *)
+            error "Unknown option: $arg"
+            exit 1
+            ;;
+    esac
 done
 
-log() {
-  printf '==> %s\n' "$*"
-}
+cd "$SCRIPT_DIR"
 
-run_sudo() {
-  if [[ "${EUID}" -eq 0 ]]; then
-    "$@"
-  else
-    sudo "$@"
-  fi
-}
-
-ensure_sudo_credentials() {
-  local reason="$1"
-
-  if [[ "${EUID}" -eq 0 ]]; then
-    return
-  fi
-
-  if ! command -v sudo >/dev/null 2>&1; then
-    printf 'sudo is required for this setup step but is not installed.\n' >&2
-    exit 1
-  fi
-
-  if sudo -n -v >/dev/null 2>&1; then
-    return
-  fi
-
-  if [[ ! -t 0 || ! -t 1 ]]; then
-    printf '%s\n' "$reason" >&2
-    printf 'Run this script from an interactive terminal or pre-authorize sudo with `sudo -v` first.\n' >&2
-    exit 1
-  fi
-
-  log "$reason"
-  sudo -v
-}
-
-# System packages
-if [[ $SKIP_SYSTEM_PACKAGES -eq 0 ]]; then
-  ensure_sudo_credentials "Installing worker system packages requires sudo access. Confirm it now before package installation begins."
-  log "Installing system packages"
-  
-  if [[ -f /etc/os-release ]]; then
-    # Linux
-    . /etc/os-release
-    case "$ID" in
-      ubuntu|debian)
-        echo "Detected Debian/Ubuntu"
-        run_sudo apt-get update
-        run_sudo apt-get install -y python3 python3-pip python3-venv
-        ;;
-      fedora|rhel|centos)
-        echo "Detected Fedora/RHEL/CentOS"
-        run_sudo dnf install -y python3 python3-pip
-        ;;
-      arch)
-        echo "Detected Arch Linux"
-        run_sudo pacman -S --needed python python-pip
-        ;;
-      *)
-        echo "Warning: Unsupported Linux distribution: $ID"
-        echo "Please ensure Python 3.9+ is installed"
-        ;;
-    esac
-  elif [[ "$OSTYPE" == "darwin"* ]]; then
-    # macOS
-    echo "Detected macOS - assuming Python 3 is already installed"
-    if ! command -v python3 &> /dev/null; then
-      echo "Error: python3 not found. Please install Python 3.9+ using Homebrew:"
-      echo "  brew install python@3.11"
-      exit 1
-    fi
-  else
-    echo "Unsupported distro: missing /etc/os-release"
-  fi
-else
-  echo "==> Skipping system package installation"
+# Install system packages
+if [[ "$SKIP_SYSTEM_PACKAGES" == "false" ]]; then
+    ensure_sudo_once "Installing system packages requires sudo."
+    log "Installing Python"
+    install_system_packages_python
 fi
 
-# Check for Python (required even if system packages were skipped)
-if [[ $SKIP_SYSTEM_PACKAGES -eq 1 ]]; then
-  if ! command -v python3 &> /dev/null; then
-    echo "Error: python3 not found. Please install Python 3.9+"
+# Verify Python if system packages were skipped
+if [[ "$SKIP_SYSTEM_PACKAGES" == "true" ]] && ! command -v python3 &>/dev/null; then
+    error "python3 not found. Install Python 3.9+"
     exit 1
-  fi
 fi
 
 # Check for provisioner CLI
-if [[ ! -d "$PROVISIONER_DIR" ]]; then
-  echo "Error: Provisioner CLI not found at: $PROVISIONER_DIR"
-  echo "Set PROVISIONER_CLI_PATH environment variable or create .env file"
-  exit 1
-fi
+[[ ! -d "$PROVISIONER_DIR" ]] && error "Provisioner CLI not found at: $PROVISIONER_DIR" && exit 1
+[[ ! -x "$PROVISIONER_DIR/setup" ]] && error "Provisioner setup script not found at: $PROVISIONER_DIR/setup" && exit 1
 
-if [[ ! -x "$PROVISIONER_DIR/setup" ]]; then
-  echo "Error: Provisioner setup script not found at: $PROVISIONER_DIR/setup"
-  exit 1
-fi
-
-# Setup provisioner CLI (installs dependencies in shared or separate venv)
+# Setup provisioner CLI if needed
 if [[ -d "$PROVISIONER_VENV_DIR" && ! -x "$PROVISIONER_VENV_DIR/bin/python" ]]; then
-  log "Removing incomplete provisioner virtualenv"
-  rm -rf "$PROVISIONER_VENV_DIR"
+    log "Removing incomplete provisioner virtualenv"
+    rm -rf "$PROVISIONER_VENV_DIR"
 fi
 
 mkdir -p "$(dirname "$PROVISIONER_VENV_DIR")"
 
 log "Running provisioner CLI setup"
-"$PROVISIONER_DIR/setup" "${PROVISIONER_ARGS[@]}" --venv "$PROVISIONER_VENV_DIR"
+"$PROVISIONER_DIR/setup" ${PROVISIONER_ARGS[@]+"${PROVISIONER_ARGS[@]}"} --venv "$PROVISIONER_VENV_DIR"
 
-# Python virtual environment for worker
+# Create worker virtualenv
 VENV_DIR=".venv"
+[[ ! -d "$VENV_DIR" ]] && log "Creating worker virtualenv" && python3 -m venv "$VENV_DIR"
 
-if [[ ! -d "$VENV_DIR" ]]; then
-  echo "==> Creating worker Python virtual environment"
-  python3 -m venv "$VENV_DIR"
-fi
-
-# Activate virtual environment
+# Activate and install
 source "$VENV_DIR/bin/activate"
-
-# Install Python package
-echo "==> Installing worker Python package"
+log "Installing worker package"
 pip install --upgrade pip
-pip install -e .
+[[ "$INSTALL_DEV" == "true" ]] && pip install -e ".[dev]" || pip install -e .
 
-# Install dev dependencies
-if [[ $INSTALL_DEV -eq 1 ]]; then
-  echo "==> Installing worker development dependencies"
-  pip install -e ".[dev]"
-fi
-
-echo ""
-echo "Setup complete!"
-echo ""
-echo "Provisioner CLI installed at: $PROVISIONER_DIR"
-echo "Provisioner virtualenv: $PROVISIONER_VENV_DIR"
-echo "Worker virtualenv: $VENV_DIR"
-echo ""
-echo "To activate the worker virtual environment:"
-echo "  source $VENV_DIR/bin/activate"
-echo ""
-echo "To start the worker:"
-echo "  ./start"
+log "Worker setup complete. Start with: ./start"

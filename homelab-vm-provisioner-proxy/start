@@ -2,11 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROXY_DIR="$SCRIPT_DIR"
-PROXY_PUBLIC_DIR="$PROXY_DIR/public"
+PROXY_PUBLIC_DIR="$SCRIPT_DIR/public"
 
-# Source component .env (parent vars inherited through execution sequence)
+# Source component .env
 if [[ -f "$SCRIPT_DIR/.env" ]]; then
     set -a
     source "$SCRIPT_DIR/.env"

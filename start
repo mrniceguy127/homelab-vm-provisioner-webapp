@@ -2,6 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source shared library
+source "$ROOT_DIR/scripts/lib.sh"
+
+# Component directories
 API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
@@ -11,33 +16,12 @@ QUEUE_DIR="$ROOT_DIR/homelab-vm-provisioner-job-queue"
 PROXY_PUBLIC_INDEX="$PROXY_DIR/public/index.html"
 
 PROVISIONER_CLI_PATH="${PROVISIONER_CLI_PATH:-homelab-vm-provisioner-cli}"
-if [[ "$PROVISIONER_CLI_PATH" != /* ]]; then
-    PROVISIONER_DIR="$ROOT_DIR/$PROVISIONER_CLI_PATH"
-else
-    PROVISIONER_DIR="$PROVISIONER_CLI_PATH"
-fi
+[[ "$PROVISIONER_CLI_PATH" != /* ]] && PROVISIONER_DIR="$ROOT_DIR/$PROVISIONER_CLI_PATH" || PROVISIONER_DIR="$PROVISIONER_CLI_PATH"
 
-relative_path() {
-    python3 -c 'import os,sys; print(os.path.relpath(sys.argv[2], sys.argv[1]))' "$1" "$2"
-}
+# Source .env file
+source_env "$ROOT_DIR/.env"
 
-normalize_provisioner_env() {
-    export PROVISIONER_CLI_PATH="$PROVISIONER_DIR"
-
-    if [[ -n "${PROVISIONER_DATA_DIR:-}" && "$PROVISIONER_DATA_DIR" != /* ]]; then
-        local data_dir_absolute="$ROOT_DIR/$PROVISIONER_DATA_DIR"
-        export PROVISIONER_DATA_DIR="$(relative_path "$PROVISIONER_DIR" "$data_dir_absolute")"
-    fi
-}
-
-# Source .env file if it exists
-if [[ -f "$ROOT_DIR/.env" ]]; then
-    set -a
-    source "$ROOT_DIR/.env"
-    set +a
-fi
-
-# Build mode defaults (can be overridden by .env)
+# Build mode defaults
 ENABLE_CLIENT="${ENABLE_CLIENT:-true}"
 ENABLE_API="${ENABLE_API:-true}"
 ENABLE_DB_SERVICE="${ENABLE_DB_SERVICE:-true}"
@@ -48,454 +32,210 @@ ENABLE_QUEUE="${ENABLE_QUEUE:-true}"
 PROVISIONER_VENV_DIR="${PROVISIONER_VENV_DIR:-$PROVISIONER_DIR/.venv}"
 PROVISIONER_PYTHON_BIN="$PROVISIONER_VENV_DIR/bin/python"
 
-normalize_provisioner_env
-
-# Set LOCAL_HOST based on Docker mode
+# Set LOCAL_HOST helper
 set_local_host() {
-    if [[ -z "${LOCAL_HOST:-}" ]]; then
-        if [[ "${USE_DOCKER:-false}" == "true" ]]; then
-            LOCAL_HOST="172.17.0.1"
-        else
-            LOCAL_HOST="localhost"
-        fi
-    fi
+    [[ -z "${LOCAL_HOST:-}" ]] && LOCAL_HOST=$([[ "${DOCKER_MODE:-false}" == "true" ]] && echo "172.17.0.1" || echo "localhost")
 }
 
-# Parse arguments for Docker mode and legacy client-only mode
-USE_DOCKER=false
+# Parse arguments
+DOCKER_MODE=false
 PROXY_PORT="${PROXY_PORT:-3000}"
 API_PORT="${API_PORT:-3001}"
 
-log() {
-    printf '==> %s\n' "$*"
-}
-
-docker_container_exists() {
-    docker inspect "$1" >/dev/null 2>&1
-}
-
-docker_container_running() {
-    [[ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" == "true" ]]
-}
-
-docker_container_id() {
-    docker inspect -f '{{.Id}}' "$1" 2>/dev/null || true
-}
-
-docker_container_image_id() {
-    docker inspect -f '{{.Image}}' "$1" 2>/dev/null || true
-}
-
-docker_container_label() {
-    local container_name="$1"
-    local label_name="$2"
-    docker inspect -f "{{index .Config.Labels \"$label_name\"}}" "$container_name" 2>/dev/null || true
-}
-
-docker_image_id() {
-    docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || true
-}
-
-ensure_sudo_credentials() {
-    local reason="$1"
-
-    if [[ "${EUID}" -eq 0 ]]; then
-        return
-    fi
-
-    if ! command -v sudo >/dev/null 2>&1; then
-        printf 'sudo is required for this start step but is not installed.\n' >&2
-        exit 1
-    fi
-
-    if sudo -n -v >/dev/null 2>&1; then
-        return
-    fi
-
-    if [[ ! -t 0 || ! -t 1 ]]; then
-        printf '%s\n' "$reason" >&2
-        printf 'Run this script from an interactive terminal or pre-authorize sudo with `sudo -v` first.\n' >&2
-        exit 1
-    fi
-
-    log "$reason"
-    sudo -v
-}
-
 for arg in "$@"; do
     case "$arg" in
-        --docker)
-            USE_DOCKER=true
-            ;;
-        --client-only)
-            # Legacy flag support - sets mode flags
-            ENABLE_CLIENT=true
-            ENABLE_API=false
-            ENABLE_DB_SERVICE=false
-            ENABLE_QUEUE=false
-            ENABLE_WORKER=false
+        --docker) DOCKER_MODE=true ;;
+        --client-only) ENABLE_CLIENT=true; ENABLE_API=false; ENABLE_DB_SERVICE=false; ENABLE_QUEUE=false; ENABLE_WORKER=false ;;
+        --help)
+            cat <<EOF
+Usage: $0 [OPTIONS]
+
+Start all workspace services.
+
+Options:
+  --docker        Start services in Docker
+  --client-only   Start only client and proxy
+  --help          Show this help message
+EOF
+            exit 0
             ;;
     esac
 done
 
-# Set LOCAL_HOST and API_HOST after parsing arguments
+# Set LOCAL_HOST and exports
 set_local_host
-export LOCAL_HOST
+export LOCAL_HOST HOST_ID="${HOST_ID:-local}" API_HOST="${API_HOST:-$LOCAL_HOST}" API_PORT PROXY_PORT QUEUE_HOST="${QUEUE_HOST:-$LOCAL_HOST}"
 
-# Ensure HOST_ID is exported for child processes
-if [[ -z "${HOST_ID:-}" ]]; then
-    HOST_ID="local"
-fi
-export HOST_ID
-
-# Construct API_HOST for child processes (without http:// scheme)
-# Child processes will add scheme if needed
-if [[ -z "${API_HOST:-}" ]]; then
-    API_HOST="$LOCAL_HOST"
-fi
-export API_HOST
-export API_PORT
-export PROXY_PORT
-
-# Set QUEUE_HOST to LOCAL_HOST if not already set
-if [[ -z "${QUEUE_HOST:-}" ]]; then
-    QUEUE_HOST="$LOCAL_HOST"
-fi
-export QUEUE_HOST
-
-# Construct API_URL with scheme for display and URL construction
+# Construct API URL for display
 API_HOST_WITH_SCHEME="$API_HOST"
-if [[ ! "$API_HOST_WITH_SCHEME" =~ ^https?:// ]]; then
-    API_HOST_WITH_SCHEME="http://$API_HOST_WITH_SCHEME"
-fi
+[[ ! "$API_HOST_WITH_SCHEME" =~ ^https?:// ]] && API_HOST_WITH_SCHEME="http://$API_HOST_WITH_SCHEME"
 API_URL="$API_HOST_WITH_SCHEME:$API_PORT"
 
-# Display enabled services
-printf '==> Starting services with configuration:\n'
-printf '    WORKER:      %s\n' "$ENABLE_WORKER"
-printf '    CLIENT:      %s\n' "$ENABLE_CLIENT"
-printf '    API:         %s\n' "$ENABLE_API"
-printf '    DB_SERVICE:  %s\n' "$ENABLE_DB_SERVICE"
-printf '    QUEUE:       %s\n' "$ENABLE_QUEUE"
-printf '    DB:          %s\n' "$ENABLE_DB"
-printf '\n'
+# Display configuration
+log "Starting services:"
+log "  WORKER:      $ENABLE_WORKER"
+log "  CLIENT:      $ENABLE_CLIENT"
+log "  API:         $ENABLE_API"
+log "  DB_SERVICE:  $ENABLE_DB_SERVICE"
+log "  QUEUE:       $ENABLE_QUEUE"
+log "  DB:          $ENABLE_DB"
+echo ""
 
-# Client-only mode: build client and start proxy only (no API)
+# Client-only mode: build client and start proxy only
 if [[ "$ENABLE_API" == "false" && "$ENABLE_CLIENT" == "true" ]]; then
-    printf '==> Client-only mode: building frontend and starting proxy\n'
+    log "Client-only mode: building frontend and starting proxy"
     
-    # Build client
-    if [[ "$USE_DOCKER" == "true" ]]; then
-        printf '==> Building client with Docker\n'
-        "$ROOT_DIR/homelab-vm-provisioner-client/build"
+    if [[ "$DOCKER_MODE" == "true" ]]; then
+        "$CLIENT_DIR/build" && "$PROXY_DIR/build" --docker
     else
-        printf '==> Building client locally\n'
-        npm --prefix "$ROOT_DIR/homelab-vm-provisioner-client" run build
-        
-        printf '==> Deploying client bundle to proxy public directory\n'
+        npm --prefix "$CLIENT_DIR" run build
         rm -rf "$PROXY_DIR/public"
         mkdir -p "$PROXY_DIR/public"
-        cp -R "$ROOT_DIR/homelab-vm-provisioner-client/dist/." "$PROXY_DIR/public/"
+        cp -R "$CLIENT_DIR/dist/." "$PROXY_DIR/public/"
     fi
     
-    # Start proxy only (no API)
-    if [[ "$USE_DOCKER" == "true" ]]; then
-        # Check if Docker image exists
-        if ! docker image inspect homelab-vm-provisioner-proxy:latest >/dev/null 2>&1; then
-            printf 'Docker image not found. Run ./setup --docker or ./homelab-vm-provisioner-proxy/build first.\n' >&2
-            exit 1
-        fi
-        printf '==> Configure API_HOST to point to remote API (current: %s)\n' "$API_URL"
-
-        PROXY_PORT="$PROXY_PORT" API_PORT="$API_PORT" API_HOST="$API_HOST" "$PROXY_DIR/start" --docker
-    else
-        printf '==> Starting proxy locally on port %s\n' "$PROXY_PORT"
-        printf '==> Configure API_HOST to point to remote API (current: %s)\n' "$API_URL"
-        printf '==> Access the application at http://localhost:%s\n' "$PROXY_PORT"
-        
-        API_URL="$API_URL" PORT="$PROXY_PORT" npm --prefix "$PROXY_DIR" start
-    fi
+    log "Starting proxy on port $PROXY_PORT"
+    log "Configure API_HOST to point to remote API (current: $API_URL)"
     
+    [[ "$DOCKER_MODE" == "true" ]] && PROXY_PORT="$PROXY_PORT" API_PORT="$API_PORT" API_HOST="$API_HOST" "$PROXY_DIR/start" --docker || API_URL="$API_URL" PORT="$PROXY_PORT" npm --prefix "$PROXY_DIR" start
     exit 0
 fi
 
-if [[ "$ENABLE_DB" == "true" && "$USE_DOCKER" == "false" && "$ENABLE_API" == "true" ]]; then
-    ensure_sudo_credentials "Native PostgreSQL startup and API libvirt operations require sudo access. Confirm it now before services start in the background."
-elif [[ "$ENABLE_DB" == "true" && "$USE_DOCKER" == "false" ]]; then
-    ensure_sudo_credentials "Starting native PostgreSQL requires sudo access. Confirm it now before services start."
-elif [[ "$ENABLE_API" == "true" && "$USE_DOCKER" == "false" ]]; then
-    ensure_sudo_credentials "The API needs sudo access for libvirt operations and privileged log access. Confirm it now before the API starts in the background."
-elif [[ "$ENABLE_WORKER" == "true" ]]; then
-    ensure_sudo_credentials "The worker daemon requires sudo access for libvirt and nftables operations. Confirm it now before the worker starts in the background."
-fi
+# Determine if sudo is needed
+NEEDS_SUDO=false
+[[ "$ENABLE_DB" == "true" && "$DOCKER_MODE" == "false" && "$ENABLE_API" == "true" ]] && NEEDS_SUDO=true
+[[ "$ENABLE_DB" == "true" && "$DOCKER_MODE" == "false" && "$ENABLE_API" != "true" ]] && NEEDS_SUDO=true
+[[ "$ENABLE_API" == "true" && "$DOCKER_MODE" == "false" ]] && NEEDS_SUDO=true
+[[ "$ENABLE_WORKER" == "true" ]] && NEEDS_SUDO=true
 
-# Validate prerequisites for full-stack mode
-if [[ "$ENABLE_API" == "true" && "$USE_DOCKER" == "false" && ! -x "$PROVISIONER_PYTHON_BIN" ]]; then
-    printf 'Provisioner Python interpreter not found at %s\n' "$PROVISIONER_PYTHON_BIN" >&2
-    printf 'Run ./setup first so the provisioner is installed for the API bridge.\n' >&2
+$NEEDS_SUDO && ensure_sudo_once "Services require sudo access for PostgreSQL/libvirt/nftables operations."
+
+# Validate API prerequisites
+if [[ "$ENABLE_API" == "true" && "$DOCKER_MODE" == "false" && ! -x "$PROVISIONER_PYTHON_BIN" ]]; then
+    error "Provisioner Python interpreter not found at $PROVISIONER_PYTHON_BIN"
+    echo "Run ./setup first" >&2
     exit 1
 fi
 
-if [[ -x "$PROVISIONER_PYTHON_BIN" ]]; then
-    export HLVMP_PYTHON_BIN="$PROVISIONER_PYTHON_BIN"
-fi
+[[ -x "$PROVISIONER_PYTHON_BIN" ]] && export HLVMP_PYTHON_BIN="$PROVISIONER_PYTHON_BIN"
 
-# Start services based on mode configuration
+# Process management
 PIDS=()
-DB_CONTAINER_STARTED=false
-API_CONTAINER_STARTED=false
-PROXY_CONTAINER_STARTED=false
-QUEUE_CONTAINER_STARTED=false
+CONTAINERS_STARTED=()
 
-cleanup_queue_container() {
-    if [[ "$QUEUE_CONTAINER_STARTED" == "true" ]]; then
-        docker stop hlvmp-rabbitmq >/dev/null 2>&1 || true
-        docker rm -f hlvmp-rabbitmq >/dev/null 2>&1 || true
-    fi
-}
-
-cleanup_db_container() {
-    if [[ "$DB_CONTAINER_STARTED" == "true" ]]; then
-        docker stop hlvmp-db >/dev/null 2>&1 || true
-        docker rm -f hlvmp-db >/dev/null 2>&1 || true
-    fi
-}
-
-cleanup_proxy_container() {
-    if [[ "$PROXY_CONTAINER_STARTED" == "true" ]]; then
-        docker rm -f hlvmp-proxy >/dev/null 2>&1 || true
-    fi
-}
-
-cleanup_api_container() {
-    if [[ "$API_CONTAINER_STARTED" == "true" ]]; then
-        docker rm -f hlvmp-api >/dev/null 2>&1 || true
-    fi
+cleanup() {
+    log "Stopping services..."
+    for container in "${CONTAINERS_STARTED[@]}"; do
+        docker rm -f "$container" >/dev/null 2>&1 || true
+    done
+    for pid in "${PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    for pid in "${PIDS[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
 }
 
 fail_startup() {
-    cleanup_proxy_container
-    cleanup_api_container
-    cleanup_db_container
-    cleanup_queue_container
-    for pid in "${PIDS[@]}"; do
-        kill "$pid" 2>/dev/null || true
-    done
-    for pid in "${PIDS[@]}"; do
-        wait "$pid" 2>/dev/null || true
-    done
+    cleanup
     exit 1
 }
 
-cleanup() {
-    printf '\n==> Stopping services...\n'
-    cleanup_proxy_container
-    cleanup_api_container
-    cleanup_db_container
-    cleanup_queue_container
-    for pid in "${PIDS[@]}"; do
-        kill "$pid" 2>/dev/null || true
-    done
-    for pid in "${PIDS[@]}"; do
-        wait "$pid" 2>/dev/null || true
-    done
-}
+trap cleanup EXIT INT TERM
 
 ensure_process_started() {
-    local pid="$1"
-    local name="$2"
-
-    if ! kill -0 "$pid" 2>/dev/null; then
-        printf '==> %s exited during startup\n' "$name" >&2
-        wait "$pid" || true
+    if ! kill -0 "$1" 2>/dev/null; then
+        error "$2 exited during startup"
+        wait "$1" || true
         fail_startup
     fi
 }
 
 ensure_client_assets() {
-    if [[ -f "$PROXY_PUBLIC_INDEX" ]]; then
-        return
-    fi
-
-    printf '==> Client bundle not found; building and deploying client assets\n'
-    if [[ "$USE_DOCKER" == "true" ]]; then
-        "$CLIENT_DIR/build" --docker
-    else
-        "$CLIENT_DIR/build"
-    fi
-
+    [[ -f "$PROXY_PUBLIC_INDEX" ]] && return
+    
+    log "Building client assets"
+    [[ "$DOCKER_MODE" == "true" ]] && "$CLIENT_DIR/build" --docker || "$CLIENT_DIR/build"
     rm -rf "$PROXY_DIR/public"
     mkdir -p "$PROXY_DIR/public"
     cp -R "$CLIENT_DIR/dist/." "$PROXY_DIR/public/"
 }
 
-ensure_proxy_image() {
-    if [[ "$USE_DOCKER" != "true" ]]; then
-        return
-    fi
-
-    if docker image inspect homelab-vm-provisioner-proxy:latest >/dev/null 2>&1; then
-        return
-    fi
-
-    printf '==> Proxy Docker image not found; building it now\n'
-    "$PROXY_DIR/build" --docker
+ensure_image() {
+    local image="$1"
+    local build_script="$2"
+    docker image inspect "$image" >/dev/null 2>&1 && return
+    log "Building Docker image: $image"
+    "$build_script" --docker
 }
 
-ensure_db_image() {
-    if [[ "$USE_DOCKER" != "true" ]]; then
-        return
-    fi
-
-    if docker image inspect hlvmp-db:latest >/dev/null 2>&1; then
-        return
-    fi
-
-    printf '==> Database Docker image not found; building it now\n'
-    "$DB_DIR/build" --docker
-}
-
-ensure_api_image() {
-    if [[ "$USE_DOCKER" != "true" ]]; then
-        return
-    fi
-
-    if docker image inspect homelab-vm-provisioner-api:latest >/dev/null 2>&1; then
-        return
-    fi
-
-    printf '==> API Docker image not found; building it now\n'
-    "$API_DIR/build" --docker
-}
-
-wait_for_api_service() {
-    if [[ "$ENABLE_API" != "true" ]]; then
-        return
-    fi
-
-    local health_url="http://localhost:${API_PORT}/health"
-
-    if ! command -v curl >/dev/null 2>&1; then
-        sleep 5
-        return
-    fi
-
-    printf '==> Waiting for API at %s\n' "$health_url"
+wait_for_service() {
+    local name="$1"
+    local url="$2"
+    command -v curl >/dev/null 2>&1 || { sleep 5; return; }
+    log "Waiting for $name at $url"
     for _ in {1..30}; do
-        if curl -fsS "$health_url" >/dev/null 2>&1; then
-            return
-        fi
+        curl -fsS "$url" >/dev/null 2>&1 && return
         sleep 1
     done
-
-    printf 'API did not become ready at %s\n' "$health_url" >&2
+    error "$name did not become ready at $url"
     fail_startup
 }
 
-wait_for_db_service() {
-    if [[ "$ENABLE_DB_SERVICE" != "true" ]]; then
-        return
+start_container() {
+    local name="$1"
+    local start_script="$2"
+    shift 2
+    
+    local id_before="$(docker inspect -f '{{.Id}}' "$name" 2>/dev/null || true)"
+    local was_running="$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || echo 'false')"
+    
+    "$start_script" "$@"
+    
+    local id_after="$(docker inspect -f '{{.Id}}' "$name" 2>/dev/null || true)"
+    if [[ -n "$id_after" && ( "$was_running" != "true" || "$id_before" != "$id_after" ) ]]; then
+        CONTAINERS_STARTED+=("$name")
     fi
-
-    local db_service_port="${DB_SERVICE_PORT:-3002}"
-    local health_url="http://localhost:${db_service_port}/health"
-
-    if ! command -v curl >/dev/null 2>&1; then
-        sleep 5
-        return
-    fi
-
-    printf '==> Waiting for database microservice at %s\n' "$health_url"
-    for _ in {1..30}; do
-        if curl -fsS "$health_url" >/dev/null 2>&1; then
-            return
-        fi
-        sleep 1
-    done
-
-    printf 'Database microservice did not become ready at %s\n' "$health_url" >&2
-    fail_startup
 }
 
-# Start native PostgreSQL service when enabled
-if [[ "$ENABLE_DB" == "true" && "$USE_DOCKER" == "false" ]]; then
-    printf '==> Starting native PostgreSQL service\n'
-    "$DB_DIR/start"
-fi
+# Start services
+[[ "$ENABLE_DB" == "true" && "$DOCKER_MODE" == "false" ]] && log "Starting native PostgreSQL" && "$DB_DIR/start"
 
-# Start RabbitMQ queue service when enabled
 if [[ "$ENABLE_QUEUE" == "true" ]]; then
-    printf '==> Starting RabbitMQ queue service\n'
-    if [[ "$USE_DOCKER" == "true" ]]; then
-        QUEUE_CONTAINER_ID_BEFORE="$(docker_container_id hlvmp-rabbitmq)"
-        QUEUE_WAS_RUNNING_BEFORE="$(docker inspect -f '{{.State.Running}}' hlvmp-rabbitmq 2>/dev/null || printf 'false')"
-        "$QUEUE_DIR/start" --docker
-        QUEUE_CONTAINER_ID_AFTER="$(docker_container_id hlvmp-rabbitmq)"
-        if [[ -n "$QUEUE_CONTAINER_ID_AFTER" ]] && [[ "$QUEUE_WAS_RUNNING_BEFORE" != "true" || "$QUEUE_CONTAINER_ID_BEFORE" != "$QUEUE_CONTAINER_ID_AFTER" ]]; then
-            QUEUE_CONTAINER_STARTED=true
-        fi
-    else
-        "$QUEUE_DIR/start"
-    fi
+    log "Starting RabbitMQ queue"
+    [[ "$DOCKER_MODE" == "true" ]] && start_container hlvmp-rabbitmq "$QUEUE_DIR/start" --docker || "$QUEUE_DIR/start"
 fi
 
-if [[ "$ENABLE_CLIENT" == "true" ]]; then
-    ensure_client_assets
-    ensure_proxy_image
-fi
+[[ "$ENABLE_CLIENT" == "true" ]] && ensure_client_assets
+[[ "$DOCKER_MODE" == "true" ]] && ensure_image homelab-vm-provisioner-proxy:latest "$PROXY_DIR/build" && ensure_image homelab-vm-provisioner-api:latest "$API_DIR/build"
 
-if [[ "$ENABLE_API" == "true" ]]; then
-    ensure_api_image
-fi
-
-# Start database stack
-if [[ "$USE_DOCKER" == "true" && ( "$ENABLE_DB_SERVICE" == "true" || "$ENABLE_DB" == "true" ) ]]; then
-    DB_SERVICE_PORT="${DB_SERVICE_PORT:-3002}"
-    ensure_db_image
-    DB_CONTAINER_ID_BEFORE="$(docker_container_id hlvmp-db)"
-    DB_WAS_RUNNING_BEFORE="$(docker inspect -f '{{.State.Running}}' hlvmp-db 2>/dev/null || printf 'false')"
-    printf '==> Starting database stack in Docker\n'
-    "$DB_DIR/start" --docker --no-follow
-    DB_CONTAINER_ID_AFTER="$(docker_container_id hlvmp-db)"
-    if [[ -n "$DB_CONTAINER_ID_AFTER" ]] && [[ "$DB_WAS_RUNNING_BEFORE" != "true" || "$DB_CONTAINER_ID_BEFORE" != "$DB_CONTAINER_ID_AFTER" ]]; then
-        DB_CONTAINER_STARTED=true
-    fi
-    wait_for_db_service
+# Start database microservice
+if [[ "$DOCKER_MODE" == "true" && ( "$ENABLE_DB_SERVICE" == "true" || "$ENABLE_DB" == "true" ) ]]; then
+    ensure_image hlvmp-db:latest "$DB_DIR/build"
+    log "Starting database in Docker"
+    start_container hlvmp-db "$DB_DIR/start" --docker --no-follow
+    wait_for_service "Database microservice" "http://localhost:${DB_SERVICE_PORT:-3002}/health"
 elif [[ "$ENABLE_DB_SERVICE" == "true" ]]; then
-    DB_SERVICE_PORT="${DB_SERVICE_PORT:-3002}"
-    printf '==> Starting database microservice on port %s\n' "$DB_SERVICE_PORT"
-    PORT="$DB_SERVICE_PORT" npm --prefix "$DB_DIR" start &
+    log "Starting database microservice on port ${DB_SERVICE_PORT:-3002}"
+    PORT="${DB_SERVICE_PORT:-3002}" npm --prefix "$DB_DIR" start &
     DB_PID=$!
     PIDS+=("$DB_PID")
     sleep 2
     ensure_process_started "$DB_PID" "Database microservice"
 fi
 
-# Start API if enabled
+# Start API
 if [[ "$ENABLE_API" == "true" ]]; then
-    printf '==> Starting API on port %s\n' "$API_PORT"
-    if [[ "$USE_DOCKER" == "true" ]]; then
-        API_CONTAINER_ID_BEFORE="$(docker_container_id hlvmp-api)"
-        API_WAS_RUNNING_BEFORE="$(docker inspect -f '{{.State.Running}}' hlvmp-api 2>/dev/null || printf 'false')"
+    log "Starting API on port $API_PORT"
+    if [[ "$DOCKER_MODE" == "true" ]]; then
+        # Docker mode: connect to other services via 172.17.0.1
+        DB_SERVICE_HOST="${DB_SERVICE_HOST:-localhost}"
+        [[ "$DB_SERVICE_HOST" == "localhost" ]] && DB_SERVICE_HOST="172.17.0.1"
+        QUEUE_HOST_API="${QUEUE_HOST:-localhost}"
+        [[ "$QUEUE_HOST_API" == "localhost" ]] && QUEUE_HOST_API="172.17.0.1"
         
-        # For Docker mode, set DB_SERVICE_HOST to 172.17.0.1 if not already set or if using localhost
-        API_DB_SERVICE_HOST="${DB_SERVICE_HOST:-localhost}"
-        if [[ "$API_DB_SERVICE_HOST" == "localhost" ]]; then
-            API_DB_SERVICE_HOST="172.17.0.1"
-        fi
-        
-        # For Docker mode, set QUEUE_HOST to 172.17.0.1 if not already set or if using localhost
-        API_QUEUE_HOST="${QUEUE_HOST:-localhost}"
-        if [[ "$API_QUEUE_HOST" == "localhost" ]]; then
-            API_QUEUE_HOST="172.17.0.1"
-        fi
-        
-        DB_SERVICE_HOST="$API_DB_SERVICE_HOST" QUEUE_HOST="$API_QUEUE_HOST" "$API_DIR/start" --docker --no-follow
-        API_CONTAINER_ID_AFTER="$(docker_container_id hlvmp-api)"
-        if [[ -n "$API_CONTAINER_ID_AFTER" ]] && [[ "$API_WAS_RUNNING_BEFORE" != "true" || "$API_CONTAINER_ID_BEFORE" != "$API_CONTAINER_ID_AFTER" ]]; then
-            API_CONTAINER_STARTED=true
-        fi
-        wait_for_api_service
+        DB_SERVICE_HOST="$DB_SERVICE_HOST" QUEUE_HOST="$QUEUE_HOST_API" start_container hlvmp-api "$API_DIR/start" --docker --no-follow
+        wait_for_service "API" "http://localhost:$API_PORT/health"
     else
         API_PORT="$API_PORT" "$API_DIR/start" &
         API_PID=$!
@@ -505,73 +245,40 @@ if [[ "$ENABLE_API" == "true" ]]; then
     fi
 fi
 
-# Start proxy if client is enabled
+# Start proxy
 if [[ "$ENABLE_CLIENT" == "true" ]]; then
-    if [[ "$USE_DOCKER" == "true" ]]; then
+    if [[ "$DOCKER_MODE" == "true" ]]; then
         PROXY_PORT="$PROXY_PORT" API_PORT="$API_PORT" API_HOST="$API_HOST" "$PROXY_DIR/start" --docker &
         PROXY_PID=$!
         PIDS+=("$PROXY_PID")
-
-        # Start worker last - after all other services are up
-        if [[ "$ENABLE_WORKER" == "true" ]]; then
-            printf '==> Starting worker daemon\n'
-            # Worker runs natively, so it connects via localhost to Docker port mappings
-            # Use subshell to export variables without affecting parent environment
-            (
-                export QUEUE_HOST=localhost
-                export API_HOST=localhost
-                export DB_SERVICE_HOST=localhost
-                "$WORKER_DIR/start"
-            ) 2>&1 | sed 's/^/[WORKER] /' &
-            WORKER_PID=$!
-            PIDS+=("$WORKER_PID")
-            sleep 1
-            ensure_process_started "$WORKER_PID" "Worker daemon"
-        fi
-
-        trap cleanup EXIT INT TERM
-
-        # Wait for proxy to exit
-        wait "$PROXY_PID"
     else
-        # Start proxy locally with npm
-        printf '==> Starting proxy on port %s\n' "$PROXY_PORT"
-        printf '==> Access the application at http://localhost:%s\n' "$PROXY_PORT"
+        log "Starting proxy on port $PROXY_PORT"
+        log "Access the application at http://localhost:$PROXY_PORT"
         PORT="$PROXY_PORT" npm --prefix "$PROXY_DIR" start &
         PROXY_PID=$!
         PIDS+=("$PROXY_PID")
-
-        # Start worker last - after all other services are up
-        if [[ "$ENABLE_WORKER" == "true" ]]; then
-            printf '==> Starting worker daemon\n'
-            "$WORKER_DIR/start" 2>&1 | sed 's/^/[WORKER] /' &
-            WORKER_PID=$!
-            PIDS+=("$WORKER_PID")
-            sleep 1
-            ensure_process_started "$WORKER_PID" "Worker daemon"
-        fi
-
-        trap cleanup EXIT INT TERM
-        wait "$PROXY_PID"
     fi
-else
-    # No proxy, just wait for background services
-    
-    # Start worker last - after all other services are up
-    if [[ "$ENABLE_WORKER" == "true" ]]; then
-        printf '==> Starting worker daemon\n'
+fi
+
+# Start worker (always last)
+if [[ "$ENABLE_WORKER" == "true" ]]; then
+    log "Starting worker daemon"
+    if [[ "$DOCKER_MODE" == "true" ]]; then
+        # Worker runs natively, connects to Docker services via localhost
+        (export QUEUE_HOST=localhost API_HOST=localhost DB_SERVICE_HOST=localhost; "$WORKER_DIR/start") 2>&1 | sed 's/^/[WORKER] /' &
+    else
         "$WORKER_DIR/start" 2>&1 | sed 's/^/[WORKER] /' &
-        WORKER_PID=$!
-        PIDS+=("$WORKER_PID")
-        sleep 1
-        ensure_process_started "$WORKER_PID" "Worker daemon"
     fi
-    
-    printf '==> Services started in background\n'
-    printf '==> Press Ctrl+C to stop\n'
+    WORKER_PID=$!
+    PIDS+=("$WORKER_PID")
+    sleep 1
+    ensure_process_started "$WORKER_PID" "Worker daemon"
+fi
 
-    trap cleanup EXIT INT TERM
-
-    # Wait for any process to exit
+# Wait for services
+if [[ "$ENABLE_CLIENT" == "true" ]]; then
+    wait "${PROXY_PID:-$$}"
+else
+    log "Services started in background. Press Ctrl+C to stop."
     wait -n
 fi
