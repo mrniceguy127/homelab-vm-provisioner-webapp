@@ -218,14 +218,14 @@ class TestRabbitMqConsumer(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "WORKER_QUEUE_HOST": "rabbitmq.local",
-            "WORKER_QUEUE_PORT": "5672",
-            "WORKER_QUEUE_VHOST": "test",
-            "WORKER_QUEUE_USER": "test_user",
-            "WORKER_QUEUE_PASSWORD": "test_pass",
-            "WORKER_QUEUE_NAME": "test.queue",
-            "WORKER_QUEUE_EXCHANGE": "test.exchange",
-            "WORKER_QUEUE_ROUTING_KEY": "test.key",
+            "QUEUE_HOST": "rabbitmq.local",
+            "QUEUE_PORT": "5672",
+            "QUEUE_VHOST": "test",
+            "QUEUE_USER": "test_user",
+            "QUEUE_PASSWORD": "test_pass",
+            "QUEUE_NAME": "test.queue",
+            "QUEUE_EXCHANGE": "test.exchange",
+            "QUEUE_ROUTING_KEY": "test.key",
         },
     )
     def test_from_env(self):
@@ -252,12 +252,12 @@ class TestRabbitMqConsumer(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "WORKER_QUEUE_HOST": "localhost",
-            "WORKER_QUEUE_PORT": "3334",
-            "WORKER_QUEUE_VHOST": "provisioner",
-            "WORKER_QUEUE_USER": "user",
+            "QUEUE_HOST": "localhost",
+            "QUEUE_PORT": "3334",
+            "QUEUE_VHOST": "provisioner",
+            "QUEUE_USER": "user",
             # PASSWORD missing
-            "WORKER_QUEUE_NAME": "queue",
+            "QUEUE_NAME": "queue",
         },
     )
     def test_from_env_missing_password(self):

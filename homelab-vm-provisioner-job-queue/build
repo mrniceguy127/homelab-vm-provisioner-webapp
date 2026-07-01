@@ -41,6 +41,21 @@ for arg in "$@"; do
     esac
 done
 
+# Set LOCAL_HOST based on Docker mode
+set_local_host() {
+    if [[ -z "${LOCAL_HOST:-}" ]]; then
+        if [[ "${DOCKER_MODE:-false}" == "true" ]]; then
+            LOCAL_HOST="172.17.0.1"
+        else
+            LOCAL_HOST="localhost"
+        fi
+    fi
+}
+
+# Set defaults for required variables
+set_local_host
+QUEUE_HOST="${QUEUE_HOST:-$LOCAL_HOST}"
+
 # Required environment variables
 : "${QUEUE_HOST:?QUEUE_HOST is required}"
 : "${QUEUE_PORT:?QUEUE_PORT is required}"
@@ -52,22 +67,25 @@ done
 : "${QUEUE_ADMIN_PASSWORD:?QUEUE_ADMIN_PASSWORD is required}"
 : "${QUEUE_API_USER:?QUEUE_API_USER is required}"
 : "${QUEUE_API_PASSWORD:?QUEUE_API_PASSWORD is required}"
-: "${WORKER_QUEUE_USER:?WORKER_QUEUE_USER is required}"
-: "${WORKER_QUEUE_PASSWORD:?WORKER_QUEUE_PASSWORD is required}"
+: "${QUEUE_USER:?QUEUE_USER is required}"
+: "${QUEUE_PASSWORD:?QUEUE_PASSWORD is required}"
 : "${HOST_ID:?HOST_ID is required}"
 
 log() {
     printf '==> %s\n' "$*"
 }
 
-# Check if RabbitMQ is already running
+# Check if RabbitMQ is accessible (for health checks from host)
 is_rabbitmq_running() {
+    # Build script runs on the host, so always use localhost for management API
+    local mgmt_host="localhost"
     curl -sf --max-time 2 -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
-        "http://$QUEUE_HOST:$QUEUE_MGMT_PORT/api/overview" >/dev/null 2>&1
+        "http://$mgmt_host:$QUEUE_MGMT_PORT/api/overview" >/dev/null 2>&1
 }
 
 # Construct management API base URL
-MGMT_API_BASE="http://$QUEUE_HOST:$QUEUE_MGMT_PORT/api"
+# Build script runs on host, so use localhost for API calls
+MGMT_API_BASE="http://localhost:$QUEUE_MGMT_PORT/api"
 
 # Derived values
 QUEUE_NAME="provisioner.worker.$HOST_ID"
@@ -110,7 +128,7 @@ else
     
     if [[ $attempt -eq $max_attempts ]]; then
         printf 'Error: RabbitMQ failed to become ready after %d seconds\n' "$((max_attempts * 2))" >&2
-        printf 'Check that RabbitMQ is running on %s:%s\n' "$QUEUE_HOST" "$QUEUE_MGMT_PORT" >&2
+        printf 'Check that RabbitMQ is running on localhost:%s\n' "$QUEUE_MGMT_PORT" >&2
         exit 1
     fi
 fi
@@ -135,18 +153,18 @@ curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
     "$MGMT_API_BASE/permissions/$QUEUE_VHOST/$QUEUE_API_USER" >/dev/null
 
 # Create worker consumer user
-log "Creating worker consumer user: $WORKER_QUEUE_USER"
+log "Creating worker consumer user: $QUEUE_USER"
 curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
     -X PUT -H "Content-Type: application/json" \
-    -d "{\"password\":\"$WORKER_QUEUE_PASSWORD\",\"tags\":\"\"}" \
-    "$MGMT_API_BASE/users/$WORKER_QUEUE_USER" >/dev/null
+    -d "{\"password\":\"$QUEUE_PASSWORD\",\"tags\":\"\"}" \
+    "$MGMT_API_BASE/users/$QUEUE_USER" >/dev/null
 
 # Grant worker consumer permissions (read from queue only)
 log "Configuring worker consumer permissions"
 curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
     -X PUT -H "Content-Type: application/json" \
     -d "{\"configure\":\"\",\"write\":\"\",\"read\":\"$QUEUE_NAME\"}" \
-    "$MGMT_API_BASE/permissions/$QUEUE_VHOST/$WORKER_QUEUE_USER" >/dev/null
+    "$MGMT_API_BASE/permissions/$QUEUE_VHOST/$QUEUE_USER" >/dev/null
 
 # Create exchange
 log "Creating exchange: $QUEUE_EXCHANGE"
@@ -171,7 +189,7 @@ curl -sf -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
 
 log ""
 log "RabbitMQ topology provisioned successfully"
-log "  Users created: $QUEUE_API_USER, $WORKER_QUEUE_USER"
+log "  Users created: $QUEUE_API_USER, $QUEUE_USER"
 log "  Exchange: $QUEUE_EXCHANGE (topic)"
 log "  Queue: $QUEUE_NAME (durable)"
 log "  Binding: $QUEUE_NAME <- $QUEUE_EXCHANGE via $ROUTING_KEY"

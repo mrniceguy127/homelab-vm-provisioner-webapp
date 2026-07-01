@@ -261,6 +261,11 @@ app.post('/vm-definitions', async (req, res, next) => {
 app.post('/vm-definition-jobs', async (req, res, next) => {
   try {
     const { vmDefinition, jobType, jobPayload, jobOptions } = req.body;
+    console.log('[DEBUG /vm-definition-jobs] Received:', JSON.stringify({
+      vm_name: vmDefinition?.vm_name,
+      target_host_id: vmDefinition?.target_host_id,
+      jobOptions: jobOptions
+    }));
     if (!vmDefinition || !jobType || !jobPayload) {
       return res.status(400).json({ error: 'Missing required fields: vmDefinition, jobType, jobPayload' });
     }
@@ -271,6 +276,12 @@ app.post('/vm-definition-jobs', async (req, res, next) => {
       jobPayload,
       jobOptions || {},
     );
+    
+    console.log('[DEBUG /vm-definition-jobs] Created job:', JSON.stringify({
+      id: result.job?.id,
+      target_host_id: result.job?.target_host_id,
+      status: result.job?.status
+    }));
 
     res.status(201).json(result);
   } catch (error) {

@@ -68,7 +68,7 @@ Three separate credential groups:
    - Write-only access to exchange
    - Separate from admin for security
 
-3. **Worker consumer credentials** (`WORKER_QUEUE_USER`, `WORKER_QUEUE_PASSWORD`)
+3. **Worker consumer credentials** (`QUEUE_USER`, `QUEUE_PASSWORD`)
    - Used by worker to consume jobs from queue
    - Read-only access to specific queue
    - One user per HOST_ID for isolation
@@ -84,7 +84,7 @@ const url = `amqp://${QUEUE_API_USER}:${QUEUE_API_PASSWORD}@${QUEUE_HOST}:${QUEU
 
 **Worker (consumer):**
 ```python
-url = f"amqp://{WORKER_QUEUE_USER}:{WORKER_QUEUE_PASSWORD}@{WORKER_QUEUE_HOST}:{WORKER_QUEUE_PORT}/{WORKER_QUEUE_VHOST}"
+url = f"amqp://{QUEUE_USER}:{QUEUE_PASSWORD}@{QUEUE_HOST}:{QUEUE_PORT}/{QUEUE_VHOST}"
 ```
 
 **Queue scripts (admin):**
@@ -195,8 +195,8 @@ See [.env.example](.env.example) for full documentation.
 - `QUEUE_ADMIN_PASSWORD` - Admin password
 - `QUEUE_API_USER` - API publisher username
 - `QUEUE_API_PASSWORD` - API publisher password
-- `WORKER_QUEUE_USER` - Worker consumer username
-- `WORKER_QUEUE_PASSWORD` - Worker consumer password
+- `QUEUE_USER` - Worker consumer username
+- `QUEUE_PASSWORD` - Worker consumer password
 - `HOST_ID` - Host identifier for queue naming
 
 **Optional:**
@@ -235,12 +235,12 @@ The worker uses queue credentials to consume jobs:
 from hlvmp_worker.rabbitmq_consumer import RabbitMqConsumer
 
 consumer = RabbitMqConsumer(
-    host=os.environ['WORKER_QUEUE_HOST'],
-    port=int(os.environ['WORKER_QUEUE_PORT']),
-    vhost=os.environ['WORKER_QUEUE_VHOST'],
-    user=os.environ['WORKER_QUEUE_USER'],
-    password=os.environ['WORKER_QUEUE_PASSWORD'],
-    queue=os.environ['WORKER_QUEUE_NAME'],
+    host=os.environ['QUEUE_HOST'],
+    port=int(os.environ['QUEUE_PORT']),
+    vhost=os.environ['QUEUE_VHOST'],
+    user=os.environ['QUEUE_USER'],
+    password=os.environ['QUEUE_PASSWORD'],
+    queue=os.environ['QUEUE_NAME'],
 )
 
 consumer.consume(callback=process_job)

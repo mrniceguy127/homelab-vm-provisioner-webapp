@@ -19,7 +19,7 @@ class TestWorkerDaemon(unittest.TestCase):
             self.config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
-                proxy_api_host="http://localhost",
+                api_host="http://localhost",
                 api_port=3001,
                 worker_id="test-worker",
                 concurrency=2,

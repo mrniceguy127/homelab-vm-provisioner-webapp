@@ -50,14 +50,21 @@ PROVISIONER_PYTHON_BIN="$PROVISIONER_VENV_DIR/bin/python"
 
 normalize_provisioner_env
 
+# Set LOCAL_HOST based on Docker mode
+set_local_host() {
+    if [[ -z "${LOCAL_HOST:-}" ]]; then
+        if [[ "${USE_DOCKER:-false}" == "true" ]]; then
+            LOCAL_HOST="172.17.0.1"
+        else
+            LOCAL_HOST="localhost"
+        fi
+    fi
+}
+
 # Parse arguments for Docker mode and legacy client-only mode
 USE_DOCKER=false
 PROXY_PORT="${PROXY_PORT:-3000}"
 API_PORT="${API_PORT:-3001}"
-
-# Construct API_URL from PROXY_API_HOST and API_PORT
-PROXY_API_HOST="${PROXY_API_HOST:-http://172.17.0.1}"
-API_URL="$PROXY_API_HOST:$API_PORT"
 
 log() {
     printf '==> %s\n' "$*"
@@ -131,6 +138,38 @@ for arg in "$@"; do
     esac
 done
 
+# Set LOCAL_HOST and API_HOST after parsing arguments
+set_local_host
+export LOCAL_HOST
+
+# Ensure HOST_ID is exported for child processes
+if [[ -z "${HOST_ID:-}" ]]; then
+    HOST_ID="local"
+fi
+export HOST_ID
+
+# Construct API_HOST for child processes (without http:// scheme)
+# Child processes will add scheme if needed
+if [[ -z "${API_HOST:-}" ]]; then
+    API_HOST="$LOCAL_HOST"
+fi
+export API_HOST
+export API_PORT
+export PROXY_PORT
+
+# Set QUEUE_HOST to LOCAL_HOST if not already set
+if [[ -z "${QUEUE_HOST:-}" ]]; then
+    QUEUE_HOST="$LOCAL_HOST"
+fi
+export QUEUE_HOST
+
+# Construct API_URL with scheme for display and URL construction
+API_HOST_WITH_SCHEME="$API_HOST"
+if [[ ! "$API_HOST_WITH_SCHEME" =~ ^https?:// ]]; then
+    API_HOST_WITH_SCHEME="http://$API_HOST_WITH_SCHEME"
+fi
+API_URL="$API_HOST_WITH_SCHEME:$API_PORT"
+
 # Display enabled services
 printf '==> Starting services with configuration:\n'
 printf '    WORKER:      %s\n' "$ENABLE_WORKER"
@@ -166,12 +205,12 @@ if [[ "$ENABLE_API" == "false" && "$ENABLE_CLIENT" == "true" ]]; then
             printf 'Docker image not found. Run ./setup --docker or ./homelab-vm-provisioner-proxy/build first.\n' >&2
             exit 1
         fi
-        printf '==> Configure PROXY_API_HOST to point to remote API (current: %s)\n' "$API_URL"
+        printf '==> Configure API_HOST to point to remote API (current: %s)\n' "$API_URL"
 
-        PROXY_PORT="$PROXY_PORT" API_PORT="$API_PORT" PROXY_API_HOST="$PROXY_API_HOST" "$PROXY_DIR/start" --docker
+        PROXY_PORT="$PROXY_PORT" API_PORT="$API_PORT" API_HOST="$API_HOST" "$PROXY_DIR/start" --docker
     else
         printf '==> Starting proxy locally on port %s\n' "$PROXY_PORT"
-        printf '==> Configure PROXY_API_HOST to point to remote API (current: %s)\n' "$API_URL"
+        printf '==> Configure API_HOST to point to remote API (current: %s)\n' "$API_URL"
         printf '==> Access the application at http://localhost:%s\n' "$PROXY_PORT"
         
         API_URL="$API_URL" PORT="$PROXY_PORT" npm --prefix "$PROXY_DIR" start
@@ -438,11 +477,20 @@ if [[ "$ENABLE_API" == "true" ]]; then
     if [[ "$USE_DOCKER" == "true" ]]; then
         API_CONTAINER_ID_BEFORE="$(docker_container_id hlvmp-api)"
         API_WAS_RUNNING_BEFORE="$(docker inspect -f '{{.State.Running}}' hlvmp-api 2>/dev/null || printf 'false')"
-        API_DB_SERVICE_URL="${DB_SERVICE_URL:-}"
-        if [[ -z "$API_DB_SERVICE_URL" || "$API_DB_SERVICE_URL" == "http://localhost:${DB_SERVICE_PORT:-3002}" ]]; then
-            API_DB_SERVICE_URL="http://172.17.0.1:${DB_SERVICE_PORT:-3002}"
+        
+        # For Docker mode, set DB_SERVICE_HOST to 172.17.0.1 if not already set or if using localhost
+        API_DB_SERVICE_HOST="${DB_SERVICE_HOST:-localhost}"
+        if [[ "$API_DB_SERVICE_HOST" == "localhost" ]]; then
+            API_DB_SERVICE_HOST="172.17.0.1"
         fi
-        DB_SERVICE_URL="$API_DB_SERVICE_URL" "$API_DIR/start" --docker --no-follow
+        
+        # For Docker mode, set QUEUE_HOST to 172.17.0.1 if not already set or if using localhost
+        API_QUEUE_HOST="${QUEUE_HOST:-localhost}"
+        if [[ "$API_QUEUE_HOST" == "localhost" ]]; then
+            API_QUEUE_HOST="172.17.0.1"
+        fi
+        
+        DB_SERVICE_HOST="$API_DB_SERVICE_HOST" QUEUE_HOST="$API_QUEUE_HOST" "$API_DIR/start" --docker --no-follow
         API_CONTAINER_ID_AFTER="$(docker_container_id hlvmp-api)"
         if [[ -n "$API_CONTAINER_ID_AFTER" ]] && [[ "$API_WAS_RUNNING_BEFORE" != "true" || "$API_CONTAINER_ID_BEFORE" != "$API_CONTAINER_ID_AFTER" ]]; then
             API_CONTAINER_STARTED=true
@@ -460,14 +508,21 @@ fi
 # Start proxy if client is enabled
 if [[ "$ENABLE_CLIENT" == "true" ]]; then
     if [[ "$USE_DOCKER" == "true" ]]; then
-        PROXY_PORT="$PROXY_PORT" API_PORT="$API_PORT" PROXY_API_HOST="$PROXY_API_HOST" "$PROXY_DIR/start" --docker &
+        PROXY_PORT="$PROXY_PORT" API_PORT="$API_PORT" API_HOST="$API_HOST" "$PROXY_DIR/start" --docker &
         PROXY_PID=$!
         PIDS+=("$PROXY_PID")
 
         # Start worker last - after all other services are up
         if [[ "$ENABLE_WORKER" == "true" ]]; then
             printf '==> Starting worker daemon\n'
-            "$WORKER_DIR/start" 2>&1 | sed 's/^/[WORKER] /' &
+            # Worker runs natively, so it connects via localhost to Docker port mappings
+            # Use subshell to export variables without affecting parent environment
+            (
+                export QUEUE_HOST=localhost
+                export API_HOST=localhost
+                export DB_SERVICE_HOST=localhost
+                "$WORKER_DIR/start"
+            ) 2>&1 | sed 's/^/[WORKER] /' &
             WORKER_PID=$!
             PIDS+=("$WORKER_PID")
             sleep 1

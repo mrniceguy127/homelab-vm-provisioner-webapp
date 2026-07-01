@@ -17,10 +17,11 @@ if [[ "${1:-}" == "--help" ]]; then
   echo ""
   echo "Required environment variables:"
   echo "  HOST_ID                Host identifier for job claiming"
-  echo "  DB_SERVICE_URL         Database microservice URL"
+  echo "  DB_SERVICE_HOST        Database microservice host (or DB_SERVICE_URL)"
   echo "  DB_SERVICE_PASSWORD    Database microservice password"
   echo ""
   echo "Optional environment variables:"
+  echo "  DB_SERVICE_PORT        Database microservice port (default: 3002)"
   echo "  PROVISIONER_CLI_PATH    Path to provisioner CLI (defaults to PATH)"
   echo "  WORKER_ID              Worker identifier (auto-generated if not set)"
   echo "  PROVISIONER_CONCURRENCY Maximum concurrent jobs (default: 1)"
@@ -59,8 +60,8 @@ if [[ -z "${HOST_ID:-}" ]]; then
   exit 1
 fi
 
-if [[ -z "${DB_SERVICE_URL:-}" ]]; then
-  echo "Error: DB_SERVICE_URL environment variable is required"
+if [[ -z "${DB_SERVICE_HOST:-}" && -z "${DB_SERVICE_URL:-}" ]]; then
+  echo "Error: DB_SERVICE_HOST (or DB_SERVICE_URL) environment variable is required"
   echo "Set it in .env or export it before running this script"
   exit 1
 fi

@@ -15,9 +15,21 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
     set +a
 fi
 
+# Set LOCAL_HOST based on Docker mode
+set_local_host() {
+    if [[ -z "${LOCAL_HOST:-}" ]]; then
+        if [[ "${DOCKER_MODE:-false}" == "true" ]]; then
+            LOCAL_HOST="172.17.0.1"
+        else
+            LOCAL_HOST="localhost"
+        fi
+    fi
+}
+
 # Defaults
 DOCKER_MODE=false
-QUEUE_HOST="${QUEUE_HOST:-localhost}"
+set_local_host
+QUEUE_HOST="${QUEUE_HOST:-$LOCAL_HOST}"
 QUEUE_PORT="${QUEUE_PORT:-3334}"
 QUEUE_MGMT_PORT="${QUEUE_MGMT_PORT:-13334}"
 QUEUE_ADMIN_USER="${QUEUE_ADMIN_USER:-admin}"
@@ -70,9 +82,12 @@ wait_for_rabbitmq() {
     
     log "Waiting for RabbitMQ to be ready..."
     
+    # Build/start scripts run on the host, so always use localhost for management API
+    local mgmt_host="localhost"
+    
     while [[ $attempt -lt $max_attempts ]]; do
         if curl -sf --max-time 2 -u "$QUEUE_ADMIN_USER:$QUEUE_ADMIN_PASSWORD" \
-            "http://$QUEUE_HOST:$QUEUE_MGMT_PORT/api/overview" >/dev/null 2>&1; then
+            "http://$mgmt_host:$QUEUE_MGMT_PORT/api/overview" >/dev/null 2>&1; then
             log "RabbitMQ is ready"
             return 0
         fi
@@ -84,7 +99,7 @@ wait_for_rabbitmq() {
     printf '\n' >&2
     
     printf 'Error: RabbitMQ failed to become ready after %d seconds\n' "$((max_attempts * 2))" >&2
-    printf 'Check that RabbitMQ is accessible at %s:%s\n' "$QUEUE_HOST" "$QUEUE_MGMT_PORT" >&2
+    printf 'Check that RabbitMQ is accessible at %s:%s\n' "$mgmt_host" "$QUEUE_MGMT_PORT" >&2
     return 1
 }
 

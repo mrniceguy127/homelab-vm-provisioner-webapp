@@ -124,7 +124,7 @@ queue: provisioner.worker.<HOST_ID>
 - ACK/NACK handling with requeue control
 - Prefetch QoS configuration
 - Graceful shutdown support
-- Connection built from `WORKER_QUEUE_*` env vars
+- Connection built from `QUEUE_*` env vars
 
 **Dependencies:**
 - Added `pika>=1.3.0` to `pyproject.toml`
@@ -165,16 +165,16 @@ QUEUE_API_PASSWORD=change-me
 
 **Worker Consumer:**
 ```bash
-WORKER_QUEUE_HOST=localhost
-WORKER_QUEUE_PORT=3334
-WORKER_QUEUE_VHOST=provisioner
-WORKER_QUEUE_EXCHANGE=provisioner.jobs
-WORKER_QUEUE_NAME=provisioner.worker.local
-WORKER_QUEUE_ROUTING_KEY=host.local
-WORKER_QUEUE_USER=worker_local
-WORKER_QUEUE_PASSWORD=change-me
+QUEUE_HOST=localhost
+QUEUE_PORT=3334
+QUEUE_VHOST=provisioner
+QUEUE_EXCHANGE=provisioner.jobs
+QUEUE_NAME=provisioner.worker.local
+QUEUE_ROUTING_KEY=host.local
+QUEUE_USER=worker_local
+QUEUE_PASSWORD=change-me
 WORKER_HOST_ID=local
-PROXY_API_HOST=http://localhost
+API_HOST=http://localhost
 API_PORT=3001
 ```
 
@@ -207,7 +207,7 @@ from hlvmp_worker.rabbitmq_consumer import RabbitMqConsumer
 import requests
 
 # Check RabbitMQ config
-if os.environ.get('WORKER_QUEUE_HOST'):
+if os.environ.get('QUEUE_HOST'):
     # RabbitMQ mode
     consumer = RabbitMqConsumer.from_env()
     consumer.connect()
@@ -373,7 +373,7 @@ User: Poll GET /api/jobs/:id for status
    ```bash
    cd homelab-vm-provisioner-worker
    cp .env.example .env
-   # Edit .env: add WORKER_QUEUE_*, PROXY_API_HOST, and API_PORT
+   # Edit .env: add QUEUE_*, API_HOST, and API_PORT
    ./start
    
    # Check logs for RabbitMQ connection

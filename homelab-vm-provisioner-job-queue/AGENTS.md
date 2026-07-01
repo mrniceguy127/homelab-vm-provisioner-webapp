@@ -43,7 +43,7 @@ See [.env.example](.env.example) for full documentation.
 - `QUEUE_VHOST`, `QUEUE_EXCHANGE` - Topology
 - `QUEUE_ADMIN_USER`, `QUEUE_ADMIN_PASSWORD` - Admin credentials
 - `QUEUE_API_USER`, `QUEUE_API_PASSWORD` - API publisher credentials
-- `WORKER_QUEUE_USER`, `WORKER_QUEUE_PASSWORD` - Worker consumer credentials
+- `QUEUE_USER`, `QUEUE_PASSWORD` - Worker consumer credentials
 - `HOST_ID` - Host identifier for queue naming
 
 ## Common Tasks

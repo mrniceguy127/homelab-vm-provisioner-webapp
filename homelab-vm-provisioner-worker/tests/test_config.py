@@ -16,14 +16,14 @@ class TestWorkerConfig(unittest.TestCase):
             config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
-                proxy_api_host="http://localhost",
+                api_host="http://localhost",
                 api_port=3001,
                 provisioner_cli_path="/usr/bin/vmctl",
             )
 
         self.assertEqual(config.database_url, "postgresql://localhost/test")
         self.assertEqual(config.host_id, "test-host")
-        self.assertEqual(config.proxy_api_host, "http://localhost")
+        self.assertEqual(config.api_host, "http://localhost")
         self.assertEqual(config.api_port, 3001)
         self.assertEqual(config.api_url, "http://localhost:3001")
         self.assertIsNotNone(config.worker_id)
@@ -36,7 +36,7 @@ class TestWorkerConfig(unittest.TestCase):
             config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
-                proxy_api_host="http://localhost",
+                api_host="http://localhost",
                 api_port=3001,
                 worker_id="custom-worker",
                 concurrency=3,
@@ -53,7 +53,7 @@ class TestWorkerConfig(unittest.TestCase):
             config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
-                proxy_api_host="http://localhost",
+                api_host="http://localhost",
                 api_port=3001,
                 concurrency=0,
                 provisioner_cli_path="/usr/bin/vmctl",
@@ -66,9 +66,9 @@ class TestWorkerConfig(unittest.TestCase):
         {
             "DATABASE_URL": "postgresql://localhost/test",
             "HOST_ID": "env-host",
-            "PROXY_API_HOST": "http://localhost",
+            "API_HOST": "http://localhost",
             "API_PORT": "3001",
-            "WORKER_QUEUE_HOST": "localhost",
+            "QUEUE_HOST": "localhost",
             "WORKER_ID": "env-worker",
             "PROVISIONER_CONCURRENCY": "2",
             "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
@@ -81,7 +81,7 @@ class TestWorkerConfig(unittest.TestCase):
 
         self.assertEqual(config.database_url, "postgresql://localhost/test")
         self.assertEqual(config.host_id, "env-host")
-        self.assertEqual(config.proxy_api_host, "http://localhost")
+        self.assertEqual(config.api_host, "http://localhost")
         self.assertEqual(config.api_port, 3001)
         self.assertEqual(config.api_url, "http://localhost:3001")
         self.assertEqual(config.worker_id, "env-worker")
@@ -93,9 +93,9 @@ class TestWorkerConfig(unittest.TestCase):
             "DB_SERVICE_URL": "http://localhost:3002",
             "DB_SERVICE_PASSWORD": "secret",
             "HOST_ID": "env-host",
-            "PROXY_API_HOST": "http://localhost",
+            "API_HOST": "http://localhost",
             "API_PORT": "3001",
-            "WORKER_QUEUE_HOST": "localhost",
+            "QUEUE_HOST": "localhost",
             "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
         },
     )
@@ -133,19 +133,19 @@ class TestWorkerConfig(unittest.TestCase):
         },
         clear=True,
     )
-    def test_from_env_missing_proxy_api_host(self):
-        """Test that from_env raises ValueError when PROXY_API_HOST is missing."""
+    def test_from_env_missing_api_host(self):
+        """Test that from_env raises ValueError when API_HOST is missing."""
         with self.assertRaises(ValueError) as context:
             WorkerConfig.from_env()
 
-        self.assertIn("PROXY_API_HOST", str(context.exception))
+        self.assertIn("API_HOST", str(context.exception))
 
     @patch.dict(
         os.environ,
         {
             "HOST_ID": "test-host",
             "DB_SERVICE_URL": "http://localhost:3002",
-            "PROXY_API_HOST": "http://localhost",
+            "API_HOST": "http://localhost",
         },
         clear=True,
     )
@@ -161,9 +161,9 @@ class TestWorkerConfig(unittest.TestCase):
         {
             "HOST_ID": "test-host",
             "DB_SERVICE_URL": "http://localhost:3002",
-            "PROXY_API_HOST": "http://localhost",
+            "API_HOST": "http://localhost",
             "API_PORT": "not-a-number",
-            "WORKER_QUEUE_HOST": "localhost",
+            "QUEUE_HOST": "localhost",
             "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
         },
         clear=True,
@@ -181,17 +181,17 @@ class TestWorkerConfig(unittest.TestCase):
         {
             "HOST_ID": "test-host",
             "DB_SERVICE_URL": "http://localhost:3002",
-            "PROXY_API_HOST": "http://localhost",
+            "API_HOST": "http://localhost",
             "API_PORT": "3001",
         },
         clear=True,
     )
-    def test_from_env_missing_worker_queue_host(self):
-        """Test that from_env raises ValueError when WORKER_QUEUE_HOST is missing."""
+    def test_from_env_missing_queue_host(self):
+        """Test that from_env raises ValueError when QUEUE_HOST is missing."""
         with self.assertRaises(ValueError) as context:
             WorkerConfig.from_env()
 
-        self.assertIn("WORKER_QUEUE_HOST", str(context.exception))
+        self.assertIn("QUEUE_HOST", str(context.exception))
 
     def test_init_with_explicit_provisioner_path(self):
         """Test initialization with explicit provisioner CLI path."""
@@ -199,7 +199,7 @@ class TestWorkerConfig(unittest.TestCase):
             config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
-                proxy_api_host="http://localhost",
+                api_host="http://localhost",
                 api_port=3001,
                 worker_id="test-worker",
                 provisioner_cli_path="/test/path",
@@ -210,7 +210,7 @@ class TestWorkerConfig(unittest.TestCase):
         self.assertIn("test-host", repr_str)
         self.assertIn("test-worker", repr_str)
         self.assertIn("concurrency=1", repr_str)
-        self.assertIn("proxy_api_host", repr_str)
+        self.assertIn("api_host", repr_str)
         self.assertIn("api_port", repr_str)
         self.assertIn("provisioner_cli_path", repr_str)
 
@@ -220,7 +220,7 @@ class TestWorkerConfig(unittest.TestCase):
             config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
-                proxy_api_host="http://localhost",
+                api_host="http://localhost",
                 api_port=3001,
                 provisioner_cli_path="/usr/bin/vmctl",
             )
@@ -233,7 +233,7 @@ class TestWorkerConfig(unittest.TestCase):
             config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
-                proxy_api_host="http://localhost",
+                api_host="http://localhost",
                 api_port=3001,
                 provisioner_cli_path="/usr/bin/vmctl",
                 dry_run=True,
@@ -246,9 +246,9 @@ class TestWorkerConfig(unittest.TestCase):
         {
             "DATABASE_URL": "postgresql://localhost/test",
             "HOST_ID": "env-host",
-            "PROXY_API_HOST": "http://localhost",
+            "API_HOST": "http://localhost",
             "API_PORT": "3001",
-            "WORKER_QUEUE_HOST": "localhost",
+            "QUEUE_HOST": "localhost",
             "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
             "WORKER_DRY_RUN": "true",
         },
@@ -265,9 +265,9 @@ class TestWorkerConfig(unittest.TestCase):
         {
             "DATABASE_URL": "postgresql://localhost/test",
             "HOST_ID": "env-host",
-            "PROXY_API_HOST": "http://localhost",
+            "API_HOST": "http://localhost",
             "API_PORT": "3001",
-            "WORKER_QUEUE_HOST": "localhost",
+            "QUEUE_HOST": "localhost",
             "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
             "WORKER_DRY_RUN": "1",
         },
@@ -284,9 +284,9 @@ class TestWorkerConfig(unittest.TestCase):
         {
             "DATABASE_URL": "postgresql://localhost/test",
             "HOST_ID": "env-host",
-            "PROXY_API_HOST": "http://localhost",
+            "API_HOST": "http://localhost",
             "API_PORT": "3001",
-            "WORKER_QUEUE_HOST": "localhost",
+            "QUEUE_HOST": "localhost",
             "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
             "WORKER_DRY_RUN": "false",
         },
@@ -303,9 +303,9 @@ class TestWorkerConfig(unittest.TestCase):
         {
             "DATABASE_URL": "postgresql://localhost/test",
             "HOST_ID": "env-host",
-            "PROXY_API_HOST": "http://localhost",
+            "API_HOST": "http://localhost",
             "API_PORT": "3001",
-            "WORKER_QUEUE_HOST": "localhost",
+            "QUEUE_HOST": "localhost",
             "PROVISIONER_CLI_PATH": "/usr/bin/vmctl",
         },
     )
@@ -322,7 +322,7 @@ class TestWorkerConfig(unittest.TestCase):
             config = WorkerConfig(
                 database_url="postgresql://localhost/test",
                 host_id="test-host",
-                proxy_api_host="http://localhost",
+                api_host="http://localhost",
                 api_port=3001,
                 worker_id="test-worker",
                 provisioner_cli_path="/test/path",

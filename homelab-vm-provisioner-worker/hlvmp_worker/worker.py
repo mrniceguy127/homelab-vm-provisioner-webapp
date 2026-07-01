@@ -445,7 +445,7 @@ class WorkerDaemon:
         logger.info("Database microservice is healthy")
         logger.info("Starting RabbitMQ consumer mode")
         logger.info("=" * 70)
-        logger.info(f"🎧 Worker is now listening for jobs on queue: {os.getenv('WORKER_QUEUE_NAME', 'provisioner.worker.' + self.config.host_id)}")
+        logger.info(f"🎧 Worker is now listening for jobs on queue: {os.getenv('QUEUE_NAME', 'provisioner.worker.' + self.config.host_id)}")
         logger.info(f"   Host ID: {self.config.host_id}")
         logger.info(f"   Worker ID: {self.config.worker_id}")
         logger.info(f"   Concurrency: {self.config.concurrency}")

@@ -204,7 +204,7 @@ ENABLE_DB=true           # PostgreSQL database
    # Or use legacy flag:
    ./setup --client-only
    ./build --client-only
-   PROXY_API_HOST=http://remote-api:3001 ./start --client-only
+   API_HOST=http://remote-api:3001 ./start --client-only
    ```
 
 3. **API only**: Backend without frontend
@@ -311,7 +311,7 @@ ENABLE_CLIENT=true
 ENABLE_API=false
 ENABLE_DB_SERVICE=false
 ENABLE_DB=false
-PROXY_API_HOST=http://remote-api-server:3001
+API_HOST=http://remote-api-server:3001
 
 ./setup
 ./build
@@ -325,7 +325,7 @@ PROXY_API_HOST=http://remote-api-server:3001
 
 # Build and start (connects to remote API)
 ./build --client-only
-PROXY_API_HOST=http://192.168.1.100 ./start --client-only
+API_HOST=http://192.168.1.100 ./start --client-only
 
 # Or combine with Docker
 ./setup --client-only --docker
@@ -336,7 +336,7 @@ PROXY_API_HOST=http://192.168.1.100 ./start --client-only
 **Configuration**: Copy `.env.example` to `.env` and customize:
 ```bash
 cp .env.example .env
-# Edit .env to set PROXY_PORT, API_PORT, PROXY_API_HOST, etc.
+# Edit .env to set PROXY_PORT, API_PORT, API_HOST, etc.
 ```
 
 Or set environment variables directly:
@@ -399,7 +399,7 @@ cp homelab-vm-provisioner-cli/.env.example homelab-vm-provisioner-cli/.env
 **Common variables:**
 - `PROXY_PORT` - Proxy server port (default: 3000)
 - `API_PORT` - API server port (default: 3001)
-- `PROXY_API_HOST` - API host for proxy (default: http://172.17.0.1 for Docker, http://localhost for native)
+- `API_HOST` - API host for proxy (default: 172.17.0.1 for Docker, localhost for native)
 - `PROVISIONER_VENV_DIR` - Python provisioner virtualenv path
 - `HLVMP_NETWORK_POOL_CIDR` - VM network pool CIDR
 - `HLVMP_NETWORK_GROUP_PREFIX_LENGTH` - VM network group prefix length
@@ -413,10 +413,10 @@ Use `--client-only` to run just the frontend proxy without starting the local AP
 
 ```bash
 # Build client and start proxy, connecting to remote API
-PROXY_API_HOST=http://192.168.1.100 ./start --client-only
+API_HOST=http://192.168.1.100 ./start --client-only
 
 # Or configure in .env
-echo "PROXY_API_HOST=http://remote-server" >> .env
+echo "API_HOST=http://remote-server" >> .env
 echo "API_PORT=3001" >> .env
 ./start --client-only
 
@@ -428,7 +428,7 @@ The `--client-only` flag:
 1. Builds the client (locally or with Docker if `--docker` is specified)
 2. Deploys static files to the proxy
 3. Starts only the proxy (skips API startup)
-4. Uses `PROXY_API_HOST` and `API_PORT` to construct the API URL
+4. Uses `API_HOST` and `API_PORT` to construct the API URL
 
 ### Environment variables
 
@@ -437,7 +437,7 @@ The `--client-only` flag:
 | `PROVISIONER_VENV_DIR` | `homelab-vm-provisioner-cli/.venv` | `./setup`, `./start` | Location of the provisioner virtual environment |
 | `PROVISIONER_DATA_DIR` | `homelab-vm-provisioner-cli/data` in root `.env`, `data` in CLI `.env` | CLI, API, worker | Provisioner data root; root-level relative values are rewritten relative to the CLI checkout before use |
 | `PORT` | `3000` (proxy), `3001` (API) | Proxy and API | HTTP ports for the services |
-| `API_URL` | `http://localhost:3001` | Proxy | Backend API URL (constructed from PROXY_API_HOST + API_PORT) |
+| `API_URL` | `http://localhost:3001` | Proxy | Backend API URL (constructed from API_HOST + API_PORT) |
 | `PROVISIONER_CLI_PATH` | `homelab-vm-provisioner-cli` | `./setup`, `./start`, API, worker | Override the provisioner checkout path |
 | `HLVMP_API_RUNTIME_DIR` | `homelab-vm-provisioner-api/runtime` | API | Legacy runtime directory used for startup migration |
 | `HLVMP_NETWORK_POOL_CIDR` | `10.80.0.0/16` | API | Global private pool used to allocate per-network-group subnets |
@@ -893,7 +893,7 @@ ENABLE_CLIENT=true
 ENABLE_API=false
 ENABLE_DB_SERVICE=false
 ENABLE_DB=false
-PROXY_API_HOST=http://remote-api:3001
+API_HOST=http://remote-api:3001
 
 ./setup
 ./build

@@ -171,16 +171,16 @@ class RabbitMqConsumer:
         """Create consumer from environment variables.
 
         Required env vars:
-            WORKER_QUEUE_HOST
-            WORKER_QUEUE_PORT
-            WORKER_QUEUE_VHOST
-            WORKER_QUEUE_USER
-            WORKER_QUEUE_PASSWORD
-            WORKER_QUEUE_NAME
+            QUEUE_HOST
+            QUEUE_PORT
+            QUEUE_VHOST
+            QUEUE_USER
+            QUEUE_PASSWORD
+            QUEUE_NAME
 
         Optional env vars:
-            WORKER_QUEUE_EXCHANGE
-            WORKER_QUEUE_ROUTING_KEY
+            QUEUE_EXCHANGE
+            QUEUE_ROUTING_KEY
 
         Returns:
             RabbitMqConsumer instance
@@ -189,12 +189,12 @@ class RabbitMqConsumer:
             ValueError: If required env vars are missing
         """
         required = {
-            "host": os.environ.get("WORKER_QUEUE_HOST"),
-            "port": os.environ.get("WORKER_QUEUE_PORT"),
-            "vhost": os.environ.get("WORKER_QUEUE_VHOST"),
-            "user": os.environ.get("WORKER_QUEUE_USER"),
-            "password": os.environ.get("WORKER_QUEUE_PASSWORD"),
-            "queue": os.environ.get("WORKER_QUEUE_NAME"),
+            "host": os.environ.get("QUEUE_HOST"),
+            "port": os.environ.get("QUEUE_PORT"),
+            "vhost": os.environ.get("QUEUE_VHOST"),
+            "user": os.environ.get("QUEUE_USER"),
+            "password": os.environ.get("QUEUE_PASSWORD"),
+            "queue": os.environ.get("QUEUE_NAME"),
         }
 
         missing = [key.upper() for key, value in required.items() if not value]
@@ -208,6 +208,6 @@ class RabbitMqConsumer:
             user=required["user"],
             password=required["password"],
             queue=required["queue"],
-            exchange=os.environ.get("WORKER_QUEUE_EXCHANGE"),
-            routing_key=os.environ.get("WORKER_QUEUE_ROUTING_KEY"),
+            exchange=os.environ.get("QUEUE_EXCHANGE"),
+            routing_key=os.environ.get("QUEUE_ROUTING_KEY"),
         )
