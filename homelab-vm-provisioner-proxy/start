@@ -147,7 +147,8 @@ if [[ "$DOCKER_MODE" == "true" ]]; then
             --name hlvmp-proxy \
             --label hlvmp.project=homelab-vm-provisioner \
             --label "hlvmp.config-hash=$DESIRED_CONFIG_HASH" \
-            -p "$PROXY_PORT:3000" \
+            -p "$PROXY_PORT:$PROXY_PORT" \
+            -e "PORT=$PROXY_PORT" \
             -e "API_URL=$API_URL" \
             -v "$PROXY_PUBLIC_DIR:/app/public:ro" \
             homelab-vm-provisioner-proxy:latest >/dev/null

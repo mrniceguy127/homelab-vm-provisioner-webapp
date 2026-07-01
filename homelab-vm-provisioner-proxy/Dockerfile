@@ -19,12 +19,14 @@ COPY src/ ./src/
 #RUN mkdir -p public
 COPY public/ ./public/
 
-# Expose proxy port
-EXPOSE 3000
+# Configurable proxy port (default: 3000)
+ARG PROXY_PORT=3000
+ENV PORT=${PROXY_PORT}
+EXPOSE ${PROXY_PORT}
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/proxy-health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
+  CMD node -e "const p=process.env.PORT||3000; require('http').get('http://localhost:'+p+'/proxy-health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
 
 # Start the proxy server
 CMD ["node", "src/server.js"]

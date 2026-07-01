@@ -13,10 +13,15 @@ The proxy is the single public-facing entry point for the entire application:
 ## Architecture
 
 ```
-Browser → Proxy (port 3000) → API (port 3001) → Python CLI → libvirt
+Browser → Proxy (port 3000) → API (port 3001)
          ↓
       Static Files (React app)
 ```
+
+The proxy only serves static files and forwards `/api` and `/health` requests to the
+API. The API handles provisioning, the RabbitMQ job queue, the database service, and
+the worker; those components are not visible to the proxy. See the
+[workspace README](../README.md) for the full architecture.
 
 ## How It Works
 

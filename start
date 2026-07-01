@@ -10,6 +10,7 @@ source "$ROOT_DIR/scripts/lib.sh"
 API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
+DB_INTERFACE_DIR="$ROOT_DIR/homelab-vm-provisioner-db-interface"
 PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
 WORKER_DIR="$ROOT_DIR/homelab-vm-provisioner-worker"
 QUEUE_DIR="$ROOT_DIR/homelab-vm-provisioner-job-queue"
@@ -182,6 +183,18 @@ wait_for_service() {
     fail_startup
 }
 
+wait_for_postgres_container() {
+    local name="$1"
+    command -v docker >/dev/null 2>&1 || { sleep 5; return; }
+    log "Waiting for PostgreSQL in $name"
+    for _ in {1..30}; do
+        docker exec "$name" pg_isready -U "${POSTGRES_USER:-hlvmp}" >/dev/null 2>&1 && return
+        sleep 1
+    done
+    error "PostgreSQL in $name did not become ready"
+    fail_startup
+}
+
 start_container() {
     local name="$1"
     local start_script="$2"
@@ -209,19 +222,29 @@ fi
 [[ "$ENABLE_CLIENT" == "true" ]] && ensure_client_assets
 [[ "$DOCKER_MODE" == "true" ]] && ensure_image homelab-vm-provisioner-proxy:latest "$PROXY_DIR/build" && ensure_image homelab-vm-provisioner-api:latest "$API_DIR/build"
 
-# Start database microservice
-if [[ "$DOCKER_MODE" == "true" && ( "$ENABLE_DB_SERVICE" == "true" || "$ENABLE_DB" == "true" ) ]]; then
-    ensure_image hlvmp-db:latest "$DB_DIR/build"
-    log "Starting database in Docker"
-    start_container hlvmp-db "$DB_DIR/start" --docker --no-follow
-    wait_for_service "Database microservice" "http://localhost:${DB_SERVICE_PORT:-3002}/health"
+# Start database (PostgreSQL) and db-interface microservice
+if [[ "$DOCKER_MODE" == "true" ]]; then
+    if [[ "$ENABLE_DB" == "true" ]]; then
+        ensure_image hlvmp-db:latest "$DB_DIR/build"
+        log "Starting PostgreSQL in Docker"
+        start_container hlvmp-db "$DB_DIR/start" --docker --no-follow
+        wait_for_postgres_container hlvmp-db
+    fi
+    if [[ "$ENABLE_DB_SERVICE" == "true" ]]; then
+        ensure_image hlvmp-db-interface:latest "$DB_INTERFACE_DIR/build"
+        log "Starting db-interface in Docker"
+        DB_POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
+        [[ "$DB_POSTGRES_HOST" == "localhost" ]] && DB_POSTGRES_HOST="172.17.0.1"
+        POSTGRES_HOST="$DB_POSTGRES_HOST" start_container hlvmp-db-interface "$DB_INTERFACE_DIR/start" --docker --no-follow
+        wait_for_service "db-interface" "http://localhost:${DB_SERVICE_PORT:-3002}/health"
+    fi
 elif [[ "$ENABLE_DB_SERVICE" == "true" ]]; then
-    log "Starting database microservice on port ${DB_SERVICE_PORT:-3002}"
-    PORT="${DB_SERVICE_PORT:-3002}" npm --prefix "$DB_DIR" start &
+    log "Starting db-interface microservice on port ${DB_SERVICE_PORT:-3002}"
+    "$DB_INTERFACE_DIR/start" &
     DB_PID=$!
     PIDS+=("$DB_PID")
     sleep 2
-    ensure_process_started "$DB_PID" "Database microservice"
+    ensure_process_started "$DB_PID" "db-interface microservice"
 fi
 
 # Start API

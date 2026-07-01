@@ -3,6 +3,7 @@ set -euo pipefail
 
 CONTAINERS=(
     "hlvmp-db"
+    "hlvmp-db-interface"
     "hlvmp-api"
     "hlvmp-proxy"
     "hlvmp-rabbitmq"
@@ -19,6 +20,7 @@ if [[ "${1:-}" == "--help" ]]; then
     echo ""
     echo "Containers removed:"
     echo "  - hlvmp-db"
+    echo "  - hlvmp-db-interface"
     echo "  - hlvmp-api"
     echo "  - hlvmp-proxy"
     echo "  - hlvmp-rabbitmq"

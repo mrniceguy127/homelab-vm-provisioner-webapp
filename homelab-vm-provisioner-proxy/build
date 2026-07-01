@@ -47,7 +47,11 @@ if [[ "$DOCKER_MODE" == "true" ]]; then
     fi
 
     log "Building proxy Docker image"
-    docker build -t homelab-vm-provisioner-proxy "$PROXY_DIR"
+    PROXY_PORT="${PROXY_PORT:-3000}"
+    log "  Proxy Port: $PROXY_PORT"
+    docker build \
+        --build-arg PROXY_PORT="$PROXY_PORT" \
+        -t homelab-vm-provisioner-proxy "$PROXY_DIR"
 
     log "Proxy Docker image built successfully"
     log "Image: homelab-vm-provisioner-proxy:latest"

@@ -4,9 +4,14 @@ Top-level workspace for the homelab VM provisioner web application.
 
 This repository wires together:
 
+- `homelab-vm-provisioner-cli/`: the Python CLI provisioning engine (libvirt/KVM, nftables)
 - `homelab-vm-provisioner-api/`: the Express API and provisioner integration
 - `homelab-vm-provisioner-client/`: the React UI
 - `homelab-vm-provisioner-proxy/`: a dead-simple reverse proxy that serves the React client and proxies API requests
+- `homelab-vm-provisioner-db/`: PostgreSQL infrastructure (engine + SQL migrations) storing job metadata, events, and resource locks
+- `homelab-vm-provisioner-db-interface/`: an Express HTTP REST microservice in front of PostgreSQL, used by the API and worker
+- `homelab-vm-provisioner-job-queue/`: RabbitMQ infrastructure for async job delivery
+- `homelab-vm-provisioner-worker/`: a Python daemon that consumes jobs from RabbitMQ and runs the CLI
 - root scripts that install dependencies, build both apps, run tests, and deploy the client bundle into the proxy's `public/` directory
 
 The sub-repositories already contain their own detailed READMEs. This document covers the root project workflow.
@@ -14,15 +19,29 @@ The sub-repositories already contain their own detailed READMEs. This document c
 ## Architecture
 
 ```text
-Browser → Proxy (port 3000) → API (port 3001) → Python CLI → libvirt
-         ↓
-      Static Files (React app)
+                                          ┌→ db-interface (3002) → PostgreSQL (5432)
+                                          │     (jobs, events, resource locks)
+Browser → Proxy (3000) → API (3001) ──────┤
+         ↓                     ↓            └→ RabbitMQ (3334) ───┐  publish (AMQP)
+      Static Files      Python CLI            (job queue exchange) │
+                            ↓                                      ↓  consume (AMQP)
+                        libvirt                          Worker Daemon (Python)
+                                                            ↓ runs vmctl CLI
+                                                         libvirt / nftables
 ```
+
+The API publishes each job to a RabbitMQ topic exchange and records job metadata via the
+db-interface microservice. The worker consumes from its host-specific queue, fetches job details from
+the API, acquires resource locks via the db-interface, executes the CLI, and reports
+status. PostgreSQL stores job metadata and locks but is not polled for job delivery.
 
 ## Workspace Layout
 
 ```text
 .
+|- homelab-vm-provisioner-cli/
+|  |- setup              # Setup Python provisioner (libvirt/KVM, nftables)
+|  `- ...
 |- homelab-vm-provisioner-api/
 |  |- setup              # Setup API and Python provisioner
 |  `- ...
@@ -34,6 +53,24 @@ Browser → Proxy (port 3000) → API (port 3001) → Python CLI → libvirt
 |  |- setup              # Setup proxy environment
 |  |- build              # Build Docker image
 |  |- start              # Run in Docker
+|  `- ...
+|- homelab-vm-provisioner-db/
+|  |- setup              # Install PostgreSQL (native or Docker)
+|  |- start              # Start PostgreSQL service
+|  |- build              # Run SQL migrations
+|  `- ...
+|- homelab-vm-provisioner-db-interface/
+|  |- setup              # Setup Node.js microservice environment
+|  |- start              # Start db-interface microservice (port 3002)
+|  `- ...
+|- homelab-vm-provisioner-job-queue/
+|  |- setup              # Install RabbitMQ (native or Docker)
+|  |- build              # Provision topology (vhost, users, exchange, queues)
+|  |- start              # Start RabbitMQ broker
+|  `- ...
+|- homelab-vm-provisioner-worker/
+|  |- setup              # Setup Python worker daemon
+|  |- start              # Start worker (consumes RabbitMQ jobs)
 |  `- ...
 |- .env.example
 |- DOCKER.md
@@ -182,8 +219,10 @@ The monorepo supports flexible deployment modes controlled by environment variab
 ```bash
 ENABLE_CLIENT=true       # React frontend + reverse proxy
 ENABLE_API=true          # Express API + Python provisioner  
-ENABLE_DB_SERVICE=true   # Node.js microservice for job queue
-ENABLE_DB=true           # PostgreSQL database
+ENABLE_DB_SERVICE=true   # db-interface (Node.js HTTP microservice over PostgreSQL)
+ENABLE_DB=true           # PostgreSQL engine + migrations
+ENABLE_JOB_QUEUE=true    # RabbitMQ broker for async job delivery
+ENABLE_WORKER=true       # Python worker daemon (consumes jobs, runs CLI)
 ```
 
 **Common deployment modes:**
@@ -215,21 +254,26 @@ ENABLE_DB=true           # PostgreSQL database
    ENABLE_DB=true
    
    ./setup && ./build && ./start
-   # API on port 3001, DB service on 3002
+   # API on port 3001, db-interface on 3002
    ```
 
-4. **Database standalone**: PostgreSQL + microservice only
+4. **Database standalone**: PostgreSQL + db-interface only
    ```bash
    ENABLE_CLIENT=false
    ENABLE_API=false
    ENABLE_DB_SERVICE=true
    ENABLE_DB=true
-   
+
+   # PostgreSQL engine + migrations
    cd homelab-vm-provisioner-db
+   ./setup && ./build --docker && ./start --docker
+
+   # db-interface microservice
+   cd ../homelab-vm-provisioner-db-interface
    ./setup && ./build --docker && ./start --docker
    ```
 
-5. **Database service only**: Microservice without PostgreSQL (requires external DB)
+5. **Database interface only**: Microservice without PostgreSQL (requires external DB)
    ```bash
     ENABLE_DB_SERVICE=true
     ENABLE_DB=false
@@ -238,15 +282,15 @@ ENABLE_DB=true           # PostgreSQL database
     POSTGRES_USER=user
     POSTGRES_PASSWORD=pass
     POSTGRES_DB=dbname
-    
-    # Microservice connects to external PostgreSQL
+
+    # db-interface connects to external PostgreSQL
     ```
 
-6. **PostgreSQL only**: Database without microservice
+6. **PostgreSQL only**: Database without db-interface
    ```bash
    ENABLE_DB=true
    ENABLE_DB_SERVICE=false
-   
+
    # Exposes PostgreSQL port 5432
    ```
 
@@ -615,6 +659,7 @@ For service-specific details, see:
 - `homelab-vm-provisioner-client/README.md`
 - `homelab-vm-provisioner-cli/README.md`
 - `homelab-vm-provisioner-db/README.md`
+- `homelab-vm-provisioner-job-queue/README.md`
 - `homelab-vm-provisioner-proxy/README.md`
 - `homelab-vm-provisioner-worker/README.md`
 
@@ -624,7 +669,7 @@ For service-specific details, see:
 
 ## Overview
 
-This is a full-stack web application for managing KVM/libvirt VMs with a React frontend, Express backend, PostgreSQL job queue, and Python provisioning engine.
+This is a full-stack web application for managing KVM/libvirt VMs with a React frontend, Express backend, RabbitMQ job queue, PostgreSQL job store, and Python provisioning engine.
 
 ## Components
 
@@ -653,7 +698,7 @@ This is a full-stack web application for managing KVM/libvirt VMs with a React f
 **[homelab-vm-provisioner-api](homelab-vm-provisioner-api/)**
 - Express API server (port 3001)
 - REST endpoints for VM operations
-- Enqueues async jobs to database
+- Publishes async jobs to RabbitMQ and records job metadata in the DB service
 - Validates VM configs (Zod schemas)
 - Manages tenant/network-group metadata
 - Stores VM configs as YAML files
@@ -661,24 +706,33 @@ This is a full-stack web application for managing KVM/libvirt VMs with a React f
 - Integrates with Python provisioner via service-mode APIs
 - Vitest + supertest for testing
 
+**[homelab-vm-provisioner-job-queue](homelab-vm-provisioner-job-queue/)**
+- RabbitMQ broker infrastructure (AMQP port 3334, management UI 13334)
+- Topic exchange `provisioner.jobs` with per-host queues `provisioner.worker.<HOST_ID>`
+- Routing key `host.<HOST_ID>` delivers each job to the correct worker
+- Three isolated credentials: admin (topology), API (publish-only), worker (consume-only)
+- Setup/start/stop/build/test scripts; no application code
+
 **[homelab-vm-provisioner-db](homelab-vm-provisioner-db/)**
-- PostgreSQL database (jobs, events, locks, VM state)
-- Express microservice (port 3002) exposing job queue REST API
+- PostgreSQL database (jobs, events, resource locks)
+- Express microservice (port 3002) exposing a job metadata + locks REST API
 - Internal API (not exposed to users)
 - Authentication via shared secret (DB_SERVICE_PASSWORD)
 - Migrations in `migrations/` directory
-- Job lifecycle: queued → running → succeeded/failed
+- Job lifecycle: queued → published → running → succeeded/failed
 - Event logging per job for debugging
 - Resource locking to prevent concurrent operations
+- Stores job metadata and locks; job delivery is handled by RabbitMQ, not polling
 
 **[homelab-vm-provisioner-worker](homelab-vm-provisioner-worker/)**
-- Python daemon that polls database for jobs
-- Claims jobs using PostgreSQL row-level locking
-- Executes `vmctl` commands (provision, destroy, clone, start, stop, etc.)
+- Python daemon that consumes jobs from its host-specific RabbitMQ queue
+- Fetches full job details from the API and marks jobs running/succeeded/failed
+- Executes `vmctl` commands as a subprocess (provision, destroy, clone, start, stop, etc.)
 - Acquires resource locks before execution (vm:<name>, network:<host>, firewall:<host>)
 - Appends events to job log throughout execution
 - Supports concurrent job execution (configurable)
 - Graceful shutdown (waits for active jobs)
+- ACKs on success / NACKs on failure to control redelivery
 - 80% test coverage requirement (unittest)
 
 ### Provisioning Layer
@@ -704,13 +758,13 @@ This is a full-stack web application for managing KVM/libvirt VMs with a React f
 ```
 1. User creates VM via client UI
 2. Client sends POST /api/configs to API
-3. API validates config and enqueues job to database
-4. Worker polls database and claims job
-5. Worker acquires resource locks
+3. API validates config, records job metadata in DB service, and publishes the job to RabbitMQ
+4. Worker consumes the job from its host-specific RabbitMQ queue
+5. Worker fetches job details from the API and acquires resource locks (DB service)
 6. Worker executes vmctl create <config>
 7. CLI provisions VM via libvirt
 8. CLI reconciles nftables firewall rules
-9. Worker marks job as succeeded
+9. Worker marks job as succeeded and ACKs the RabbitMQ message
 10. Client polls job status and refreshes VM list
 ```
 
@@ -770,7 +824,7 @@ See [API docs/vm-networking-nftables.md](homelab-vm-provisioner-api/docs/vm-netw
 ### Jobs Table
 - `id`: Job primary key
 - `type`: Job type (provision_vm, destroy_vm, clone_vm, etc.)
-- `status`: queued, running, succeeded, failed, cancelled
+- `status`: queued, published, running, succeeded, failed, cancelled
 - `target_host_id`: Host where job should run
 - `target_vm_id`: Target VM name (nullable)
 - `payload`: JSON job parameters
@@ -810,6 +864,7 @@ workspace/.env                          # Workspace defaults
 ├── homelab-vm-provisioner-client/.env  # Client overrides
 ├── homelab-vm-provisioner-proxy/.env   # Proxy overrides
 ├── homelab-vm-provisioner-db/.env      # Database overrides
+├── homelab-vm-provisioner-job-queue/.env # Job queue (RabbitMQ) overrides
 └── homelab-vm-provisioner-worker/.env  # Worker overrides
 ```
 
@@ -831,18 +886,27 @@ workspace/.env                          # Workspace defaults
 | `PROXY_PORT` | 3000 | Proxy | Proxy server port |
 | `API_PORT` | 3001 | API | API server port |
 | `DB_SERVICE_PORT` | 3002 | Database | Database microservice port |
-| `DB_SERVICE_URL` | http://localhost:3002 | API, Worker | Database microservice URL |
+| `DB_SERVICE_HOST` | localhost | API, Worker | Database microservice host |
 | `DB_SERVICE_PASSWORD` | changeme_db_secret | API, Worker, DB | Shared secret for DB authentication |
 | `HOST_ID` | (required) | API, Worker | Host identifier for job targeting |
+| `QUEUE_HOST` | localhost | API, Worker, Job Queue | RabbitMQ host |
+| `QUEUE_PORT` | 3334 | API, Worker, Job Queue | RabbitMQ AMQP port |
+| `QUEUE_MGMT_PORT` | 13334 | Job Queue | RabbitMQ management UI port |
+| `QUEUE_VHOST` | provisioner | API, Worker, Job Queue | RabbitMQ virtual host |
+| `QUEUE_EXCHANGE` | provisioner.jobs | API, Job Queue | Topic exchange for jobs |
+| `QUEUE_API_USER` / `QUEUE_API_PASSWORD` | provisioner_api / change-me | API | Publish-only credentials |
+| `QUEUE_USER` / `QUEUE_PASSWORD` | worker_<HOST_ID> / change-me | Worker | Consume-only credentials |
+| `QUEUE_NAME` | provisioner.worker.<HOST_ID> | Worker | Host-specific queue to consume |
 | `PROVISIONER_CLI_PATH` | ../homelab-vm-provisioner-cli | API, Worker | Path to CLI package |
 | `PROVISIONER_CONCURRENCY` | 1 | Worker | Max concurrent jobs |
-| `WORKER_POLL_INTERVAL` | 5.0 | Worker | Poll interval in seconds |
+| `WORKER_STATE_REFRESH_INTERVAL` | 60.0 | Worker | Runtime-state refresh interval (seconds) |
 | `HLVMP_NETWORK_POOL_CIDR` | 10.80.0.0/16 | API | Global network pool |
 | `HLVMP_NETWORK_GROUP_PREFIX_LENGTH` | 28 | API | Network group subnet size |
 | `ENABLE_CLIENT` | true | Workspace | Enable client/proxy |
 | `ENABLE_API` | true | Workspace | Enable API |
 | `ENABLE_DB_SERVICE` | true | Workspace | Enable DB microservice |
 | `ENABLE_DB` | true | Workspace | Enable PostgreSQL |
+| `ENABLE_JOB_QUEUE` | true | Workspace | Enable RabbitMQ broker |
 | `ENABLE_WORKER` | true | Workspace | Enable worker daemon |
 
 See `.env.example` files in each component for complete lists.
@@ -862,8 +926,9 @@ All components enabled:
 Services:
 - PostgreSQL (port 5432)
 - Database microservice (port 3002)
+- RabbitMQ broker (AMQP 3334, management 13334)
 - API (port 3001)
-- Worker daemon (polls every 5s)
+- Worker daemon (consumes RabbitMQ jobs)
 - Proxy (port 3000)
 
 Access: http://localhost:3000
@@ -1056,13 +1121,19 @@ flowchart TB
     %% Database Layer
     subgraph Database["💾 Database Layer"]
         direction TB
-        PostgreSQL[("PostgreSQL<br/>Jobs Queue<br/>Events Log<br/>Resource Locks")]
+        PostgreSQL[("PostgreSQL<br/>Job Metadata<br/>Events Log<br/>Resource Locks")]
+    end
+    
+    %% Message Queue Layer
+    subgraph Queue["📬 Job Queue Layer"]
+        direction TB
+        RabbitMQ["RabbitMQ<br/>Topic Exchange<br/>Per-Host Queues<br/>:3334"]
     end
     
     %% Worker Layer
     subgraph Worker_Layer["🔧 Worker Layer"]
         direction TB
-        Worker["Worker Daemon<br/>Python<br/>Polls & Claims Jobs"]
+        Worker["Worker Daemon<br/>Python<br/>Consumes Jobs"]
         CLI["Provisioner CLI<br/>vmctl<br/>Python Package"]
     end
     
@@ -1090,12 +1161,14 @@ flowchart TB
     Proxy -->|Proxies| API
     
     %% Backend connections
-    API -->|Enqueues Jobs| DB_Service
-    API -.->|Wakes via Socket| Worker
+    API -->|Publishes Jobs| RabbitMQ
+    API -->|Records Metadata| DB_Service
     DB_Service -->|Queries| PostgreSQL
     
     %% Worker connections
-    Worker -->|Claims Jobs| DB_Service
+    RabbitMQ -->|Delivers Jobs| Worker
+    Worker -->|Fetch / Update Job| API
+    Worker -->|Locks & Events| DB_Service
     Worker -->|Executes| CLI
     
     %% Provisioning connections
@@ -1115,6 +1188,7 @@ flowchart TB
     classDef frontend fill:#4A90E2,stroke:#2E5C8A,stroke-width:3px,color:#fff
     classDef backend fill:#50C878,stroke:#2E7D4E,stroke-width:3px,color:#fff
     classDef database fill:#F39C12,stroke:#B87A0A,stroke-width:3px,color:#fff
+    classDef queue fill:#E67E22,stroke:#A85A16,stroke-width:3px,color:#fff
     classDef worker fill:#9B59B6,stroke:#6C3483,stroke-width:3px,color:#fff
     classDef infra fill:#E74C3C,stroke:#A93226,stroke-width:3px,color:#fff
     classDef vm fill:#16A085,stroke:#0E6655,stroke-width:3px,color:#fff
@@ -1122,6 +1196,7 @@ flowchart TB
     class Proxy,Client frontend
     class API,DB_Service backend
     class PostgreSQL database
+    class RabbitMQ queue
     class Worker,CLI worker
     class Libvirt,QEMU,Nftables,Storage infra
     class VMs,Networks vm
@@ -1134,14 +1209,17 @@ flowchart TB
 - **React Client**: Material-UI dark mode SPA for VM management
 
 ### ⚙️ Backend Layer (Green)
-- **API Server**: Express REST API for VM operations (port 3001)
-- **DB Microservice**: Internal API for job queue operations (port 3002)
+- **API Server**: Express REST API for VM operations; publishes jobs and records metadata (port 3001)
+- **DB Microservice**: Internal API for job metadata, events, and resource locks (port 3002)
 
 ### 💾 Database Layer (Orange)
-- **PostgreSQL**: Job queue, event log, resource locks, VM state
+- **PostgreSQL**: Job metadata, event log, resource locks
+
+### 📬 Job Queue Layer (Amber)
+- **RabbitMQ**: Topic exchange and per-host queues delivering jobs to workers (port 3334)
 
 ### 🔧 Worker Layer (Purple)
-- **Worker Daemon**: Polls database, claims jobs, executes vmctl commands
+- **Worker Daemon**: Consumes jobs from RabbitMQ, executes vmctl commands, reports status
 - **Provisioner CLI**: Python package with vmctl commands for VM lifecycle
 
 ### 🖥️ Infrastructure Layer (Red)
@@ -1158,10 +1236,11 @@ flowchart TB
 
 ### Primary Async Flow (Solid Lines)
 1. **User → Proxy → API**: User requests via web UI
-2. **API → DB Service → PostgreSQL**: API enqueues jobs to database
-3. **API ⤍ Worker**: API wakes worker via Unix socket (optional)
-4. **Worker → DB Service**: Worker polls and claims jobs
-5. **Worker → CLI → libvirt**: Worker executes vmctl commands
+2. **API → DB Service → PostgreSQL**: API records job metadata
+3. **API → RabbitMQ**: API publishes the job (routing key `host.<HOST_ID>`)
+4. **RabbitMQ → Worker**: Worker consumes the job from its host queue
+5. **Worker → API / DB Service**: Worker fetches details, acquires locks, updates status
+6. **Worker → CLI → libvirt**: Worker executes vmctl commands
 
 ### Infrastructure (Solid Lines)
 - **CLI → libvirt**: Manages VMs and networks
@@ -1173,21 +1252,18 @@ flowchart TB
 
 ### Async VM Provisioning (Primary Flow)
 ```
-User → Proxy → API → DB Service → PostgreSQL
-                ↓                      ↓
-            Wake Worker          Worker polls & claims job
-                                      ↓
-                                Worker → vmctl → libvirt → QEMU
+User → Proxy → API ──publish─→ RabbitMQ ──→ Worker
+                └─metadata─→ DB Service → PostgreSQL
+                                              Worker → vmctl → libvirt → QEMU
 ```
 
 1. User creates VM via web UI
-2. API validates config and enqueues job to database
-3. API wakes worker via Unix socket (optional, reduces latency)
-4. Worker polls database and claims job using row-level locking
-5. Worker acquires resource locks (vm:<name>, network:<host>, etc.)
-6. Worker executes vmctl command
-7. CLI provisions VM via libvirt and configures nftables
-8. Worker marks job as succeeded/failed with event log
+2. API validates config, records job metadata in the DB service, and publishes the job to RabbitMQ
+3. Worker consumes the job from its host-specific RabbitMQ queue
+4. Worker fetches job details from the API and acquires resource locks (vm:<name>, network:<host>, etc.)
+5. Worker executes vmctl command
+6. CLI provisions VM via libvirt and configures nftables
+7. Worker marks job as succeeded/failed with event log and ACKs the message
 
 ### VM Status Refresh (Sync Query)
 ```

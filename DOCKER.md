@@ -4,12 +4,15 @@ Complete guide for running the homelab VM provisioner with Docker.
 
 ## Overview
 
-Docker mode runs the database microservice, API, and reverse proxy in containers while the worker remains on the host.
+Docker mode runs the database microservice, RabbitMQ broker, API, and reverse proxy in containers while the worker remains on the host (it needs libvirt/nftables access).
 
 ```
-Browser → Proxy Container (3000) → API Container (3001) → DB Service Host/Container (3002)
-         ↓                                             ↓
-      Static Files (volume mount)                 Worker Socket / CLI data
+                              ┌→ DB Service Container (3002) → PostgreSQL
+Browser → Proxy Container (3000) → API Container (3001) ─┤   (jobs, events, locks)
+         ↓                             ↓ publish       └→ RabbitMQ Container (3334)
+      Static Files (volume mount)      │                        │ consume
+                                       └───────────────────────▼
+                                               Worker (host) → vmctl CLI → libvirt
 ```
 
 ## Quick Start
@@ -67,8 +70,10 @@ This will:
 
 This runs:
 - Database microservice in Docker (port 3002 when enabled)
+- RabbitMQ broker in Docker (AMQP 3334, management 13334 when enabled)
 - API in Docker (port 3001)
 - Proxy in Docker (port 3000)
+- Worker daemon on the host (consumes RabbitMQ jobs, needs libvirt access)
 
 ## Configuration
 

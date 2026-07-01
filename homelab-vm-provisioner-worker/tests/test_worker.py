@@ -23,7 +23,7 @@ class TestWorkerDaemon(unittest.TestCase):
                 api_port=3001,
                 worker_id="test-worker",
                 concurrency=2,
-                db_service_url="http://localhost:3002",
+                db_service_base_url="http://localhost:3002",
                 db_service_password="test-password",
                 provisioner_cli_path="/usr/bin/vmctl",
             )
@@ -665,7 +665,7 @@ class TestSudoFunctions(unittest.TestCase):
         ensure_sudo_credentials()
 
         mock_run.assert_called_once()
-        self.assertEqual(mock_run.call_args[0][0], ["sudo", "-v"])
+        self.assertEqual(mock_run.call_args[0][0], ["sudo", "-n", "-v"])
 
     @patch("hlvmp_worker.worker.subprocess.run")
     def test_validate_sudo_credentials_failure(self, mock_run):

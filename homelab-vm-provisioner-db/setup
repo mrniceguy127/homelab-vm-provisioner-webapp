@@ -10,25 +10,23 @@ source "$SCRIPT_DIR/scripts/lib.sh"
 source_env "$SCRIPT_DIR/.env"
 
 # Parse arguments
-SKIP_NPM=false
 SKIP_SYSTEM_PACKAGES=false
 DOCKER_MODE=false
 
 for arg in "$@"; do
     case "$arg" in
-        --skip-npm) SKIP_NPM=true ;;
         --skip-system-packages) SKIP_SYSTEM_PACKAGES=true ;;
         --docker) DOCKER_MODE=true ;;
+        --skip-npm) ;;  # accepted for orchestrator compatibility; no npm here
         --help)
             cat <<HELP
 Usage: $0 [OPTIONS]
 
-Setup the database environment.
+Setup the PostgreSQL database environment.
 
 Options:
-  --skip-npm               Skip npm install
   --skip-system-packages   Skip system package installation
-  --docker                 Setup for Docker mode (skip PostgreSQL server install)
+  --docker                 Setup for Docker mode (pull postgres image)
   --help                   Show this help message
 HELP
             exit 0
@@ -38,36 +36,32 @@ done
 
 cd "$SCRIPT_DIR"
 
-# Install system packages
+if [[ "$DOCKER_MODE" == true ]]; then
+    log "Docker mode: pulling PostgreSQL image"
+    if ! command -v docker >/dev/null 2>&1; then
+        error "Docker is not installed"
+        printf 'Install Docker Desktop or Docker Engine before using Docker mode\n' >&2
+        exit 1
+    fi
+    docker pull postgres:17
+    log "PostgreSQL Docker image ready"
+    log "Database setup complete"
+    exit 0
+fi
+
+# Native mode
 if [[ "$SKIP_SYSTEM_PACKAGES" == false ]]; then
     ensure_sudo_once "Installing system packages requires sudo."
-    
-    if [[ "$DOCKER_MODE" == true ]]; then
-        log "Docker mode: Installing PostgreSQL client only"
-        install_system_packages_postgresql_client
-    else
-        log "Installing PostgreSQL server and client"
-        install_system_packages_postgresql_server
+    log "Installing PostgreSQL server and client"
+    install_system_packages_postgresql_server
+else
+    log "Skipping PostgreSQL package installation"
+    if ! command -v psql >/dev/null 2>&1; then
+        error "PostgreSQL is not installed and package installation was skipped"
+        printf 'Install PostgreSQL manually or run setup without --skip-system-packages\n' >&2
+        exit 1
     fi
-    
-    log "Installing Node.js"
-    install_system_packages_nodejs
-fi
-
-log "Setting up database environment"
-
-# Verify Node.js if system packages were skipped
-if [[ "$SKIP_SYSTEM_PACKAGES" == "true" ]]; then
-    require_cmd node
-    require_cmd npm
-    NODE_VERSION=$(node -v | cut -d. -f1 | tr -d 'v')
-    [[ "$NODE_VERSION" -lt 18 ]] && error "Node.js 18+ required, found: $(node -v)" && exit 1
-fi
-
-# Install npm dependencies
-if [[ "$SKIP_NPM" == false ]]; then
-    log "Installing npm dependencies"
-    npm install
+    log "PostgreSQL is already installed"
 fi
 
 log "Database setup complete"

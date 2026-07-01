@@ -339,7 +339,7 @@ class WorkerDaemon:
 
         if not job_id:
             logger.error("=" * 70)
-            logger.error(f"❌ INVALID JOB: Missing job_id in message")
+            logger.error("❌ INVALID JOB: Missing job_id in message")
             logger.error(f"   Message: {message}")
             logger.error("=" * 70)
             return False  # NACK invalid message
@@ -349,11 +349,11 @@ class WorkerDaemon:
         # Verify target host matches
         if target_host_id != self.config.host_id:
             logger.warning("=" * 70)
-            logger.warning(f"❌ INVALID JOB: Wrong target host")
+            logger.warning("❌ INVALID JOB: Wrong target host")
             logger.warning(f"   Job ID: {job_id}")
             logger.warning(f"   Expected host: {self.config.host_id}")
             logger.warning(f"   Actual target: {target_host_id}")
-            logger.warning(f"   → Job rejected (not for this worker)")
+            logger.warning("   → Job rejected (not for this worker)")
             logger.warning("=" * 70)
             return False  # NACK, job not for this host
 
@@ -397,7 +397,7 @@ class WorkerDaemon:
             logger.error("=" * 70)
             logger.error(f"❌ API ERROR: Failed to communicate with API for job {job_id}")
             logger.error(f"   Error: {e}")
-            logger.error(f"   → Job will be requeued for retry")
+            logger.error("   → Job will be requeued for retry")
             logger.error("=" * 70)
             # Don't ACK - message will be requeued for retry
             raise
@@ -406,7 +406,7 @@ class WorkerDaemon:
             logger.error(f"❌ UNEXPECTED ERROR: Exception processing job {job_id}")
             logger.error(f"   Error: {e}")
             logger.error("=" * 70)
-            logger.error(f"Full error:", exc_info=True)
+            logger.error("Full error:", exc_info=True)
             try:
                 # Try to mark job as failed via API
                 self._call_api(
@@ -492,14 +492,14 @@ def main():  # pragma: no cover
         start_sudo_keepalive()
 
         # Create database client
-        db_service_url = config.db_service_url or config.database_url
+        db_service_base_url = config.db_service_base_url or config.database_url
         db_service_password = config.db_service_password or ""
 
-        if not db_service_url:
+        if not db_service_base_url:
             logger.error("No database service URL configured")
             sys.exit(1)
 
-        db_client = DatabaseClient(db_service_url, db_service_password)
+        db_client = DatabaseClient(db_service_base_url, db_service_password)
 
         # Create job executor with worker config for validation
         executor = JobExecutor(config.provisioner_cli_path, db_client, worker_config=config)

@@ -1,12 +1,11 @@
 {
-  "name": "homelab-vm-provisioner-db",
+  "name": "homelab-vm-provisioner-db-interface",
   "version": "1.0.0",
-  "description": "PostgreSQL database microservice for async provisioner jobs",
+  "description": "HTTP interface microservice for the provisioner PostgreSQL store (job metadata, events, resource locks)",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/server.js",
-    "migrate": "./build",
     "test": "node --test test/*.test.js"
   },
   "keywords": [

@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Stop script for homelab-vm-provisioner-db
+#
+# Usage: ./stop [--docker]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Source component .env
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Defaults
+DOCKER_MODE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --docker)
+            DOCKER_MODE=true
+            ;;
+        --help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Stop PostgreSQL database."
+            echo ""
+            echo "Options:"
+            echo "  --docker    Stop PostgreSQL in Docker mode"
+            echo "  --help      Show this help message"
+            echo ""
+            echo "Default: Stop native PostgreSQL service"
+            exit 0
+            ;;
+    esac
+done
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+run_sudo() {
+    if [[ "${EUID}" -eq 0 ]]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
+docker_container_running() {
+    [[ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" == "true" ]]
+}
+
+docker_container_exists() {
+    docker inspect "$1" >/dev/null 2>&1
+}
+
+# Auto-detect Docker mode if the container exists
+if [[ "$DOCKER_MODE" == "false" ]] && command -v docker >/dev/null 2>&1; then
+    if docker_container_exists hlvmp-db 2>/dev/null; then
+        log "Auto-detected Docker mode (container exists)"
+        DOCKER_MODE=true
+    fi
+fi
+
+log "Stopping PostgreSQL (Docker mode: $DOCKER_MODE)"
+
+if [[ "$DOCKER_MODE" == "true" ]]; then
+    if docker_container_running hlvmp-db; then
+        log "Stopping PostgreSQL container"
+        docker stop hlvmp-db
+        log "PostgreSQL container stopped"
+    else
+        log "PostgreSQL container is not running"
+    fi
+else
+    # Native mode
+    if command -v systemctl >/dev/null 2>&1; then
+        SERVICE_NAME="postgresql"
+        if systemctl list-unit-files | grep -q "postgresql-17.service"; then
+            SERVICE_NAME="postgresql-17"
+        elif systemctl list-unit-files | grep -q "postgresql@17-main.service"; then
+            SERVICE_NAME="postgresql@17-main"
+        fi
+        log "Stopping $SERVICE_NAME service"
+        run_sudo systemctl stop "$SERVICE_NAME"
+        log "PostgreSQL service stopped"
+    elif command -v service >/dev/null 2>&1; then
+        run_sudo service postgresql stop
+        log "PostgreSQL service stopped"
+    elif command -v rc-service >/dev/null 2>&1; then
+        run_sudo rc-service postgresql stop
+        log "PostgreSQL service stopped"
+    else
+        printf 'Error: Could not detect service manager. Stop PostgreSQL manually.\n' >&2
+        exit 1
+    fi
+fi

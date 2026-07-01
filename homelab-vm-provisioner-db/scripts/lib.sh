@@ -66,45 +66,6 @@ detect_os() {
     fi
 }
 
-install_system_packages_nodejs() {
-    local os_id="$(detect_os)"
-    
-    case "$os_id" in
-        ubuntu|debian)
-            run_sudo apt-get update
-            if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | cut -d. -f1 | tr -d 'v')" -lt 18 ]]; then
-                log "Installing Node.js 18.x from NodeSource"
-                if [[ ! -f /etc/apt/keyrings/nodesource.gpg ]]; then
-                    run_sudo mkdir -p /etc/apt/keyrings
-                    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | run_sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
-                fi
-                echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_18.x nodistro main" | run_sudo tee /etc/apt/sources.list.d/nodesource.list
-                run_sudo apt-get update
-                run_sudo apt-get install -y nodejs
-            fi
-            ;;
-        fedora|rhel|centos)
-            if ! command -v node >/dev/null 2>&1 || [[ "$(node -v | cut -d. -f1 | tr -d 'v')" -lt 18 ]]; then
-                log "Installing Node.js 18.x"
-                run_sudo dnf module install -y nodejs:18
-            fi
-            ;;
-        arch)
-            run_sudo pacman -S --needed nodejs npm
-            ;;
-        macos)
-            if ! command -v node >/dev/null 2>&1; then
-                error "Node.js not found. Install with: brew install node"
-                return 1
-            fi
-            ;;
-        *)
-            error "Unsupported OS: $os_id"
-            return 1
-            ;;
-    esac
-}
-
 install_system_packages_postgresql_client() {
     local os_id="$(detect_os)"
     

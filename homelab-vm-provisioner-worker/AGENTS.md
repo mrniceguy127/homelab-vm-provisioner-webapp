@@ -1,10 +1,10 @@
 # Homelab VM Provisioner Worker - AGENTS.md
 
-Long-running daemon for processing VM provisioning jobs from PostgreSQL.
+Long-running daemon that consumes VM provisioning jobs from RabbitMQ and executes them.
 
 ## Project Role
 
-The worker is a **standalone Python service** that claims and executes queued provisioning jobs. It runs outside the API request path and communicates with the database microservice via HTTP REST API. The worker calls `vmctl` as a subprocess rather than importing provisioner code directly.
+The worker is a **standalone Python service** that consumes queued provisioning jobs from its host-specific RabbitMQ queue and executes them. It runs outside the API request path, fetches job details from the API, and manages job metadata, events, and resource locks through the database microservice via HTTP REST API. The worker calls `vmctl` as a subprocess rather than importing provisioner code directly.
 
 ##Quick Start
 
@@ -17,13 +17,20 @@ cp .env.example .env   # Configure environment
 ## Configuration
 
 Environment variables (set in `.env`):
-- `HOST_ID`: Host identifier for job claiming (required)
-- `DB_SERVICE_URL`: Database microservice URL (required)
+- `HOST_ID`: Host identifier; selects the queue and matches job routing (required)
+- `QUEUE_HOST`: RabbitMQ host (required)
+- `QUEUE_PORT`: RabbitMQ AMQP port (default: 3334)
+- `QUEUE_VHOST`: RabbitMQ virtual host (default: provisioner)
+- `QUEUE_NAME`: Host-specific queue to consume (default: provisioner.worker.<HOST_ID>)
+- `QUEUE_USER` / `QUEUE_PASSWORD`: Consume-only RabbitMQ credentials
+- `API_HOST` / `API_PORT`: API used to fetch/update job details (required)
+- `DB_SERVICE_HOST`: Database microservice host (required)
+- `DB_SERVICE_PORT`: Database microservice port (default: 3002)
 - `DB_SERVICE_PASSWORD`: Database microservice password (required)
-- `PROVISIONER_CLI_PATH`: Path to provisioner CLI directory (default: PATH lookup)
+- `PROVISIONER_CLI_PATH`: Path to provisioner CLI directory (required; must be set explicitly)
 - `WORKER_ID`: Unique worker identifier (default: auto-generated)
 - `PROVISIONER_CONCURRENCY`: Max concurrent jobs (default: 1)
-- `WORKER_POLL_INTERVAL`: Poll interval in seconds (default: 5.0)
+- `WORKER_STATE_REFRESH_INTERVAL`: Runtime-state refresh interval in seconds (default: 60.0)
 - `WORKER_DRY_RUN`: Enable dry-run mode (default: false, auto-enables if dependencies unavailable)
 
 ### Dry-Run Mode
@@ -45,8 +52,9 @@ Enable explicitly with `WORKER_DRY_RUN=true` or let it auto-detect missing depen
 
 ## Key Design Points
 
-- **In-Process Execution**: Imports and calls provisioner service module directly
-- **HTTP Client**: Uses database microservice REST API (not direct PostgreSQL)
+- **RabbitMQ Consumption**: Consumes jobs from a host-specific queue (pull model, not polling)
+- **Subprocess Execution**: Runs the `vmctl` CLI as a subprocess (does not import provisioner code)
+- **HTTP Client**: Uses the database microservice REST API (not direct PostgreSQL) and the API for job details
 - **Resource Locking**: Prevents conflicting concurrent operations
 - **Concurrency Support**: Thread pool for concurrent job execution
 - **Graceful Shutdown**: Waits for active jobs to complete
@@ -59,7 +67,8 @@ Enable explicitly with `WORKER_DRY_RUN=true` or let it auto-detect missing depen
 hlvmp_worker/
 ├── config.py              # Worker configuration from environment
 ├── db_client.py           # HTTP client for database microservice
-├── executor.py            # Job executor (service module-based)
+├── rabbitmq_consumer.py   # RabbitMQ consumer (job delivery)
+├── executor.py            # Job executor (subprocess-based vmctl calls)
 ├── dry_run_service_mode.py # Mock service mode for dry-run
 └── worker.py              # Main daemon with event loop
 ```
@@ -70,7 +79,7 @@ hlvmp_worker/
 Set `PROVISIONER_CLI_PATH=../homelab-vm-provisioner-cli`
 
 ### Standalone Mode
-Ensure `vmctl` is in PATH or set `PROVISIONER_CLI_PATH`
+Set `PROVISIONER_CLI_PATH` to the provisioner CLI checkout (required)
 
 ## Code Style
 

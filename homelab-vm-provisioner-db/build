@@ -21,13 +21,13 @@ for arg in "$@"; do
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
-            echo "Build/prepare database infrastructure."
+            echo "Build/prepare the PostgreSQL database."
             echo ""
             echo "Options:"
-            echo "  --docker    Pull PostgreSQL Docker image"
+            echo "  --docker    Build the PostgreSQL Docker image (postgres + migrations)"
             echo "  --help      Show this help message"
             echo ""
-            echo "Default: Verify native PostgreSQL installation"
+            echo "Default: Verify native PostgreSQL and run migrations"
             exit 0
             ;;
     esac
@@ -55,7 +55,6 @@ psql_db() {
             psql "$@"
         return
     fi
-
     psql "$DATABASE_URL" "$@"
 }
 
@@ -68,61 +67,55 @@ describe_database_target() {
             "${POSTGRES_DB:-hlvmp}"
         return
     fi
-
     printf 'DATABASE_URL'
 }
 
 if [[ "$DOCKER_MODE" == true ]]; then
-    # Docker mode: build custom image with PostgreSQL + microservice
+    # Docker mode: build the PostgreSQL image (migrations baked in, applied on startup)
     if ! command -v docker >/dev/null 2>&1; then
         log "Error: Docker not found. Install Docker Engine."
         exit 1
     fi
-    
-    log "Building hlvmp-db Docker image (PostgreSQL + microservice)"
+
+    log "Building hlvmp-db Docker image (PostgreSQL + migrations)"
     docker build -t hlvmp-db:latest "$SCRIPT_DIR"
-    
+
     log ""
     log "Build complete - Docker image ready: hlvmp-db:latest"
-    log ""
-    log "The container will run migrations automatically on startup."
+    log "The container runs migrations automatically on startup."
     log "Start the container:"
     log "  ./start --docker"
 else
-    # Native mode: verify PostgreSQL is installed
+    # Native mode: verify PostgreSQL is installed and run migrations
     log "Verifying native PostgreSQL installation"
-    
+
     if ! command -v psql >/dev/null 2>&1; then
         log "Error: PostgreSQL client (psql) not found"
         log "Run ./setup to install PostgreSQL"
         exit 1
     fi
-    
+
     PSQL_VERSION=$(psql --version | head -n1)
     log "Found: $PSQL_VERSION"
-    
-    # Run migrations if database connection settings are available
+
     if has_database_config; then
         log "Running database migrations against $(describe_database_target)"
-        
-        # Create migration_history table if not exists
+
         psql_db <<'EOF'
 CREATE TABLE IF NOT EXISTS migration_history (
     version VARCHAR(255) PRIMARY KEY,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 EOF
-        
-        # Get list of applied migrations
+
         APPLIED_MIGRATIONS=$(psql_db -t -c "SELECT version FROM migration_history ORDER BY version" | tr -d ' ')
-        
-        # Apply each migration file
+
         MIGRATION_DIR="$SCRIPT_DIR/migrations"
         if [[ -d "$MIGRATION_DIR" ]]; then
             for migration_file in "$MIGRATION_DIR"/*.sql; do
                 if [[ -f "$migration_file" ]]; then
                     migration_name=$(basename "$migration_file" .sql)
-                    
+
                     if echo "$APPLIED_MIGRATIONS" | grep -q "^${migration_name}$"; then
                         log "✓ $migration_name (already applied)"
                     else
@@ -138,7 +131,7 @@ EOF
                 fi
             done
         fi
-        
+
         log ""
         log "Build complete - database ready"
     else

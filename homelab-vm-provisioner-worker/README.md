@@ -1,18 +1,18 @@
 # Homelab VM Provisioner Worker
 
-Long-running daemon for processing VM provisioning jobs from PostgreSQL.
+Long-running daemon that consumes VM provisioning jobs from RabbitMQ and executes them.
 
 ## Overview
 
-The worker daemon is a standalone Python service that claims and executes queued provisioning jobs. It is designed to run on the same host as the VMs being provisioned and must have access to the `vmctl` command-line tool from the [homelab-vm-provisioner-cli](../homelab-vm-provisioner-cli) project.
+The worker daemon is a standalone Python service that consumes queued provisioning jobs from its host-specific RabbitMQ queue and executes them. It is designed to run on the same host as the VMs being provisioned and must have access to the `vmctl` command-line tool from the [homelab-vm-provisioner-cli](../homelab-vm-provisioner-cli) project. Job metadata, event logs, and resource locks are managed through the [db-interface microservice](../homelab-vm-provisioner-db-interface) over HTTP.
 
 ## Features
 
-- Claims jobs only for configured `HOST_ID` (never processes other hosts' jobs)
+- Consumes only its host-specific queue (`provisioner.worker.<HOST_ID>`) so it never processes other hosts' jobs
 - Concurrent job execution (configurable via `PROVISIONER_CONCURRENCY`)
 - Resource locking prevents conflicting concurrent operations
 - Graceful shutdown (waits for active jobs to complete)
-- Automatic retry for transient failures
+- ACK on success / NACK on failure to control RabbitMQ redelivery
 - Comprehensive event logging per job
 
 ## Quick Start
@@ -23,7 +23,8 @@ The worker daemon is a standalone Python service that claims and executes queued
 
 # Configure environment
 cp .env.example .env
-# Edit .env and set HOST_ID, DB_SERVICE_URL, DB_SERVICE_PASSWORD
+# Edit .env and set HOST_ID, QUEUE_HOST, DB_SERVICE_HOST, DB_SERVICE_PASSWORD,
+# API_HOST, API_PORT, and PROVISIONER_CLI_PATH
 
 # Start worker (requires sudo for libvirt/nftables access)
 ./start
@@ -37,13 +38,22 @@ The worker reads configuration from environment variables:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `HOST_ID` | Yes | - | Host identifier for job claiming |
-| `DB_SERVICE_URL` | Yes | - | Database microservice URL |
+| `HOST_ID` | Yes | - | Host identifier; selects the queue and matches job routing |
+| `QUEUE_HOST` | Yes | - | RabbitMQ host |
+| `QUEUE_PORT` | No | 3334 | RabbitMQ AMQP port |
+| `QUEUE_VHOST` | No | provisioner | RabbitMQ virtual host |
+| `QUEUE_NAME` | No | provisioner.worker.<HOST_ID> | Host-specific queue to consume |
+| `QUEUE_USER` | No | - | Consume-only RabbitMQ user |
+| `QUEUE_PASSWORD` | No | - | Password for the RabbitMQ user |
+| `API_HOST` | Yes | - | API host used to fetch/update job details |
+| `API_PORT` | No | 3001 | API port |
+| `DB_SERVICE_HOST` | Yes | - | Database microservice host |
+| `DB_SERVICE_PORT` | No | 3002 | Database microservice port |
 | `DB_SERVICE_PASSWORD` | Yes | - | Database microservice password |
-| `PROVISIONER_CLI_PATH` | No | PATH lookup | Path to provisioner CLI directory |
+| `PROVISIONER_CLI_PATH` | Yes | - | Path to provisioner CLI directory (must be set explicitly) |
 | `WORKER_ID` | No | auto-generated | Unique worker identifier (hostname-PID) |
 | `PROVISIONER_CONCURRENCY` | No | 1 | Maximum concurrent jobs |
-| `WORKER_POLL_INTERVAL` | No | 5.0 | Poll interval in seconds |
+| `WORKER_STATE_REFRESH_INTERVAL` | No | 60.0 | Runtime-state refresh interval in seconds |
 | `WORKER_DRY_RUN` | No | false | Enable dry-run mode (log commands without executing) |
 
 ### Dry-Run Mode
@@ -151,7 +161,7 @@ The worker can be deployed independently on any host:
 When running as part of the monorepo:
 
 1. Configure `.env` with `PROVISIONER_CLI_PATH=../homelab-vm-provisioner-cli`
-2. Use monorepo scripts: `./start --enable-worker` (from workspace root)
+2. Use monorepo scripts: `./start` from the workspace root (worker enabled by default; set `ENABLE_WORKER=false` to disable)
 
 ### Systemd Service (Future)
 
@@ -160,20 +170,21 @@ The worker is designed to run as a systemd service. Service file will be added i
 ## Architecture
 
 ```
+RabbitMQ (host queue)
+   ↓ (consumes job message)
 Worker Daemon
-   ↓ (claims jobs)
-Database Microservice
-   ↓ (queries)
-PostgreSQL
+   ├→ API            (fetch job details, update status)
+   ├→ DB Microservice (acquire locks, append events) → PostgreSQL
+   └→ vmctl CLI      (libvirt / nftables)
 ```
 
 The worker:
-1. Polls database microservice for queued jobs matching `HOST_ID`
-2. Claims jobs using row-level locking (safe for concurrent workers)
-3. Acquires resource locks before execution
-4. Executes job by calling `vmctl` command
-5. Updates job status and appends events
-6. Releases resource locks
+1. Consumes a job message from its host-specific RabbitMQ queue (`provisioner.worker.<HOST_ID>`)
+2. Verifies the job targets this host and fetches full details from the API
+3. Marks the job running and acquires resource locks via the DB microservice
+4. Executes the job by calling the `vmctl` command as a subprocess
+5. Appends events and updates job status (succeeded/failed) via the API/DB service
+6. Releases resource locks and ACKs (or NACKs) the RabbitMQ message
 
 ## Limitations
 
@@ -189,10 +200,11 @@ Project structure:
 ```
 hlvmp_worker/
   ├── __init__.py
-  ├── config.py        # Configuration management
-  ├── db_client.py     # Database microservice client
-  ├── executor.py      # Job executor (calls vmctl)
-  └── worker.py        # Main worker daemon
+  ├── config.py            # Configuration management
+  ├── db_client.py         # Database microservice client
+  ├── rabbitmq_consumer.py # RabbitMQ consumer (job delivery)
+  ├── executor.py          # Job executor (calls vmctl)
+  └── worker.py            # Main worker daemon
 
 tests/
   ├── test_config.py
@@ -328,7 +340,7 @@ PROVISIONER_CONCURRENCY=3
 - Jobs for different VMs can run concurrently
 - Jobs requiring the same locks are serialized
 - Resource locks prevent conflicts
-- Workers poll independently and use row-level locking to claim jobs
+- Each worker consumes only its host queue; RabbitMQ delivers one job at a time per prefetch
 
 ### Recommendations
 

@@ -96,7 +96,7 @@ class RabbitMqConsumer:
                 job_id = message.get('job_id')
                 logger.info("")
                 logger.info("=" * 70)
-                logger.info(f"📬 NEW JOB MESSAGE RECEIVED from RabbitMQ")
+                logger.info("📬 NEW JOB MESSAGE RECEIVED from RabbitMQ")
                 logger.info(f"   Job ID: {job_id}")
                 logger.info(f"   Queue: {self.queue}")
                 logger.info("=" * 70)
@@ -121,20 +121,20 @@ class RabbitMqConsumer:
 
             except json.JSONDecodeError as e:
                 logger.error("=" * 70)
-                logger.error(f"❌ INVALID MESSAGE: Failed to parse JSON")
+                logger.error("❌ INVALID MESSAGE: Failed to parse JSON")
                 logger.error(f"   Error: {e}")
                 logger.error(f"   Raw body: {body[:200]}")  # First 200 chars
-                logger.error(f"   → Message rejected (malformed JSON)")
+                logger.error("   → Message rejected (malformed JSON)")
                 logger.error("=" * 70)
                 # NACK invalid message without requeue
                 channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
             except Exception as e:
                 logger.error("=" * 70)
-                logger.error(f"❌ ERROR: Exception while processing message")
+                logger.error("❌ ERROR: Exception while processing message")
                 logger.error(f"   Error: {e}")
-                logger.error(f"   → Message will be requeued for retry")
+                logger.error("   → Message will be requeued for retry")
                 logger.error("=" * 70)
-                logger.error(f"Full error:", exc_info=True)
+                logger.error("Full error:", exc_info=True)
                 # NACK with requeue for processing errors (transient failure)
                 channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
 

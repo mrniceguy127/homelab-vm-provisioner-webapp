@@ -1,38 +1,15 @@
-# Multi-stage build for PostgreSQL + Node.js microservice
-# Stage 1: Get Node.js from official image
-FROM node:20-bookworm-slim AS node
-
-# Stage 2: Build final image with PostgreSQL + Node.js
+# PostgreSQL image for the provisioner store.
+# Bakes in migrations and a custom entrypoint that initializes the database
+# and applies migrations on first startup.
 FROM postgres:17
 
-# Copy Node.js and npm completely from the Node image
-COPY --from=node /usr/local/include/node /usr/local/include/node
-COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=node /usr/local/bin /usr/local/bin
-COPY --from=node /opt /opt
+# Copy migrations and custom entrypoint
+COPY migrations/ /app/migrations/
+COPY docker-entrypoint.sh /usr/local/bin/hlvmp-docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/hlvmp-docker-entrypoint.sh
 
-# Verify Node.js installation
-RUN node --version && npm --version
+# Expose PostgreSQL port
+EXPOSE 5432
 
-# Create app directory
-WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-
-# Install dependencies
-RUN npm ci --only=production
-
-# Copy application code
-COPY src/ ./src/
-COPY migrations/ ./migrations/
-
-# Copy custom entrypoint
-COPY docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
-# Expose microservice port (3002) and PostgreSQL port (5432)
-EXPOSE 3002 5432
-
-# Use custom entrypoint that starts PostgreSQL and/or the microservice
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+# Custom entrypoint starts PostgreSQL and runs migrations
+ENTRYPOINT ["/usr/local/bin/hlvmp-docker-entrypoint.sh"]

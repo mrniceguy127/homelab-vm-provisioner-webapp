@@ -90,7 +90,8 @@ class TestWorkerConfig(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "DB_SERVICE_URL": "http://localhost:3002",
+            "DB_SERVICE_HOST": "localhost",
+            "DB_SERVICE_PORT": "3002",
             "DB_SERVICE_PASSWORD": "secret",
             "HOST_ID": "env-host",
             "API_HOST": "http://localhost",
@@ -101,10 +102,10 @@ class TestWorkerConfig(unittest.TestCase):
     )
     @patch("hlvmp_worker.config.Path.exists", return_value=True)
     def test_from_env_with_db_service(self, mock_exists):
-        """Test loading with DB service URL instead of DATABASE_URL."""
+        """Test loading DB service base URL from host and port components."""
         config = WorkerConfig.from_env()
 
-        self.assertEqual(config.db_service_url, "http://localhost:3002")
+        self.assertEqual(config.db_service_base_url, "http://localhost:3002")
         self.assertEqual(config.db_service_password, "secret")
         self.assertEqual(config.host_id, "env-host")
 
@@ -117,19 +118,22 @@ class TestWorkerConfig(unittest.TestCase):
         self.assertIn("HOST_ID", str(context.exception))
 
     @patch.dict(os.environ, {"HOST_ID": "test-host"}, clear=True)
-    def test_from_env_missing_database_url(self):
-        """Test that from_env raises ValueError when both URLs are missing."""
+    def test_from_env_defaults_db_service_base_url(self):
+        """Test that DB service base URL defaults so validation proceeds to API_HOST.
+
+        The base URL is auto-constructed from DB_SERVICE_HOST/DB_SERVICE_PORT
+        (defaulting to localhost:3002), so a missing DB config never raises.
+        With only HOST_ID set, the next required variable (API_HOST) triggers.
+        """
         with self.assertRaises(ValueError) as context:
             WorkerConfig.from_env()
 
-        self.assertIn("DATABASE_URL", str(context.exception))
-        self.assertIn("DB_SERVICE_URL", str(context.exception))
+        self.assertIn("API_HOST", str(context.exception))
 
     @patch.dict(
         os.environ,
         {
             "HOST_ID": "test-host",
-            "DB_SERVICE_URL": "http://localhost:3002",
         },
         clear=True,
     )
@@ -144,7 +148,6 @@ class TestWorkerConfig(unittest.TestCase):
         os.environ,
         {
             "HOST_ID": "test-host",
-            "DB_SERVICE_URL": "http://localhost:3002",
             "API_HOST": "http://localhost",
         },
         clear=True,
@@ -160,7 +163,6 @@ class TestWorkerConfig(unittest.TestCase):
         os.environ,
         {
             "HOST_ID": "test-host",
-            "DB_SERVICE_URL": "http://localhost:3002",
             "API_HOST": "http://localhost",
             "API_PORT": "not-a-number",
             "QUEUE_HOST": "localhost",
@@ -180,7 +182,6 @@ class TestWorkerConfig(unittest.TestCase):
         os.environ,
         {
             "HOST_ID": "test-host",
-            "DB_SERVICE_URL": "http://localhost:3002",
             "API_HOST": "http://localhost",
             "API_PORT": "3001",
         },

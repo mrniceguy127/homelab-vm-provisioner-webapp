@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# Test script for homelab-vm-provisioner-db
+#
+# Verifies PostgreSQL connectivity and that migrations/schema are in place.
+#
+# Usage: ./test
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Source component .env
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+RESET='\033[0m'
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+pass() {
+    printf "${GREEN}✓ %s${RESET}\n" "$*"
+}
+
+fail() {
+    printf "${RED}✗ %s${RESET}\n" "$*"
+    EXIT_CODE=1
+}
+
+has_modular_database_config() {
+    [[ -n "${POSTGRES_HOST+x}" || -n "${POSTGRES_PORT+x}" || -n "${POSTGRES_USER+x}" || -n "${POSTGRES_PASSWORD+x}" || -n "${POSTGRES_DB+x}" ]]
+}
+
+psql_db() {
+    if has_modular_database_config; then
+        PGHOST="${POSTGRES_HOST:-localhost}" \
+        PGPORT="${POSTGRES_PORT:-5432}" \
+        PGUSER="${POSTGRES_USER:-hlvmp}" \
+        PGPASSWORD="${POSTGRES_PASSWORD:-hlvmppass}" \
+        PGDATABASE="${POSTGRES_DB:-hlvmp}" \
+            psql "$@"
+        return
+    fi
+    psql "${DATABASE_URL:?Set POSTGRES_* or DATABASE_URL}" "$@"
+}
+
+table_exists() {
+    local table="$1"
+    local count
+    count="$(psql_db -tAc "SELECT to_regclass('public.$table') IS NOT NULL")" || return 1
+    [[ "$count" == "t" ]]
+}
+
+EXIT_CODE=0
+
+if ! command -v psql >/dev/null 2>&1; then
+    fail "PostgreSQL client (psql) not found. Run ./setup."
+    exit 1
+fi
+
+log "Testing PostgreSQL database"
+log ""
+
+# Test: connectivity
+log "Checking PostgreSQL connectivity"
+if psql_db -tAc "SELECT 1" >/dev/null 2>&1; then
+    pass "PostgreSQL is reachable"
+else
+    fail "PostgreSQL is not reachable"
+    log ""
+    log "Some checks failed"
+    exit 1
+fi
+
+# Test: migration_history exists
+log "Checking migration_history table"
+if table_exists migration_history; then
+    pass "migration_history table exists"
+else
+    fail "migration_history table does not exist (run ./build)"
+fi
+
+# Test: core schema tables exist
+for table in jobs job_events resource_locks; do
+    log "Checking table: $table"
+    if table_exists "$table"; then
+        pass "Table exists: $table"
+    else
+        fail "Table does not exist: $table (run ./build)"
+    fi
+done
+
+# Test: all migration files are recorded as applied
+if table_exists migration_history; then
+    log "Checking all migrations are applied"
+    APPLIED="$(psql_db -tAc "SELECT version FROM migration_history" 2>/dev/null | tr -d ' ')"
+    MISSING=0
+    for migration_file in "$SCRIPT_DIR"/migrations/*.sql; do
+        [[ -f "$migration_file" ]] || continue
+        name="$(basename "$migration_file" .sql)"
+        if ! echo "$APPLIED" | grep -q "^${name}$"; then
+            fail "Migration not applied: $name"
+            MISSING=1
+        fi
+    done
+    [[ "$MISSING" -eq 0 ]] && pass "All migrations applied"
+fi
+
+log ""
+if [[ $EXIT_CODE -eq 0 ]]; then
+    log "All checks passed"
+else
+    log "Some checks failed"
+fi
+
+exit $EXIT_CODE

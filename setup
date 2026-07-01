@@ -11,6 +11,7 @@ API_DIR="$ROOT_DIR/homelab-vm-provisioner-api"
 CLIENT_DIR="$ROOT_DIR/homelab-vm-provisioner-client"
 PROXY_DIR="$ROOT_DIR/homelab-vm-provisioner-proxy"
 DB_DIR="$ROOT_DIR/homelab-vm-provisioner-db"
+DB_INTERFACE_DIR="$ROOT_DIR/homelab-vm-provisioner-db-interface"
 WORKER_DIR="$ROOT_DIR/homelab-vm-provisioner-worker"
 QUEUE_DIR="$ROOT_DIR/homelab-vm-provisioner-job-queue"
 
@@ -92,7 +93,8 @@ echo ""
 # Check required paths based on enabled services
 [[ "$ENABLE_CLIENT" == "true" ]] && require_path "$CLIENT_DIR" && require_path "$PROXY_DIR"
 [[ "$ENABLE_API" == "true" ]] && require_path "$API_DIR" && require_path "$PROVISIONER_DIR"
-[[ "$ENABLE_DB_SERVICE" == "true" || "$ENABLE_DB" == "true" ]] && require_path "$DB_DIR"
+[[ "$ENABLE_DB" == "true" ]] && require_path "$DB_DIR"
+[[ "$ENABLE_DB_SERVICE" == "true" ]] && require_path "$DB_INTERFACE_DIR"
 [[ "$ENABLE_WORKER" == "true" ]] && require_path "$WORKER_DIR"
 
 # Check for git (required for submodule initialization)
@@ -124,7 +126,8 @@ if [[ ${#SUBMODULES_TO_INIT[@]} -gt 0 ]]; then
 fi
 
 # Setup components
-[[ "$ENABLE_DB" == "true" || "$ENABLE_DB_SERVICE" == "true" ]] && log "Setting up database" && "$DB_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
+[[ "$ENABLE_DB" == "true" ]] && log "Setting up database (PostgreSQL)" && "$DB_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
+[[ "$ENABLE_DB_SERVICE" == "true" ]] && log "Setting up db-interface" && "$DB_INTERFACE_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 [[ "$ENABLE_QUEUE" == "true" ]] && log "Setting up job queue" && "$QUEUE_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 [[ "$ENABLE_API" == "true" ]] && log "Setting up API" && "$API_DIR/setup" ${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}
 

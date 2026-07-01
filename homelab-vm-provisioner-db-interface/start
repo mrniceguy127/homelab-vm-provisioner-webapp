@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source component .env (parent vars inherited through execution sequence)
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Parse arguments
+DOCKER_MODE=false
+FOLLOW_LOGS=true
+
+for arg in "$@"; do
+    case "$arg" in
+        --docker)
+            DOCKER_MODE=true
+            ;;
+        --no-follow)
+            FOLLOW_LOGS=false
+            ;;
+        --help)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Start the db-interface microservice."
+            echo ""
+            echo "Options:"
+            echo "  --docker      Start the microservice in Docker"
+            echo "  --no-follow   Don't follow logs (for orchestrated startup)"
+            echo "  --help        Show this help message"
+            echo ""
+            echo "Default: Start the microservice natively (node src/server.js)"
+            exit 0
+            ;;
+    esac
+done
+
+log() {
+    printf '==> %s\n' "$*"
+}
+
+hash_string() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | cut -d' ' -f1
+        return
+    fi
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 | cut -d' ' -f1
+        return
+    fi
+    printf 'Missing command: sha256sum or shasum\n' >&2
+    exit 1
+}
+
+docker_container_exists() {
+    docker inspect "$1" >/dev/null 2>&1
+}
+
+docker_container_running() {
+    [[ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" == "true" ]]
+}
+
+docker_container_image_id() {
+    docker inspect -f '{{.Image}}' "$1" 2>/dev/null || true
+}
+
+docker_container_label() {
+    docker inspect -f "{{index .Config.Labels \"$2\"}}" "$1" 2>/dev/null || true
+}
+
+docker_image_id() {
+    docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || true
+}
+
+# Set LOCAL_HOST based on Docker mode
+set_local_host() {
+    if [[ -z "${LOCAL_HOST:-}" ]]; then
+        if [[ "${DOCKER_MODE:-false}" == "true" ]]; then
+            LOCAL_HOST="172.17.0.1"
+        else
+            LOCAL_HOST="localhost"
+        fi
+    fi
+}
+
+set_local_host
+
+# Microservice + PostgreSQL connection configuration
+DB_SERVICE_PORT="${DB_SERVICE_PORT:-3002}"
+DB_SERVICE_PASSWORD="${DB_SERVICE_PASSWORD:-changeme_db_secret}"
+POSTGRES_HOST="${POSTGRES_HOST:-$LOCAL_HOST}"
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+POSTGRES_USER="${POSTGRES_USER:-hlvmp}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-hlvmppass}"
+POSTGRES_DB="${POSTGRES_DB:-hlvmp}"
+
+export DB_SERVICE_PORT DB_SERVICE_PASSWORD
+export POSTGRES_HOST POSTGRES_PORT POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB
+
+if [[ "$DOCKER_MODE" == true ]]; then
+    if ! command -v docker >/dev/null 2>&1; then
+        log "Error: Docker not found. Install Docker Engine."
+        exit 1
+    fi
+
+    log "Starting db-interface container"
+    log "  Container: hlvmp-db-interface"
+    log "  Microservice Port: $DB_SERVICE_PORT (exposed)"
+    log "  PostgreSQL target: $POSTGRES_USER@$POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB"
+
+    DOCKER_ENV_ARGS=(
+        -e DB_SERVICE_PORT="$DB_SERVICE_PORT"
+        -e DB_SERVICE_PASSWORD="$DB_SERVICE_PASSWORD"
+        -e POSTGRES_HOST="$POSTGRES_HOST"
+        -e POSTGRES_PORT="$POSTGRES_PORT"
+        -e POSTGRES_USER="$POSTGRES_USER"
+        -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD"
+        -e POSTGRES_DB="$POSTGRES_DB"
+    )
+
+    if [[ -n "${DATABASE_URL:-}" ]]; then
+        DOCKER_ENV_ARGS+=("-e" "DATABASE_URL=$DATABASE_URL")
+    fi
+
+    DESIRED_IMAGE_ID="$(docker_image_id hlvmp-db-interface:latest)"
+    if [[ -z "$DESIRED_IMAGE_ID" ]]; then
+        log "Error: hlvmp-db-interface:latest image not found. Run ./build --docker first."
+        exit 1
+    fi
+
+    DESIRED_CONFIG_HASH="$({
+        printf 'DB_SERVICE_PORT=%s\n' "$DB_SERVICE_PORT"
+        printf 'DB_SERVICE_PASSWORD=%s\n' "$DB_SERVICE_PASSWORD"
+        printf 'POSTGRES_HOST=%s\n' "$POSTGRES_HOST"
+        printf 'POSTGRES_PORT=%s\n' "$POSTGRES_PORT"
+        printf 'POSTGRES_USER=%s\n' "$POSTGRES_USER"
+        printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+        printf 'POSTGRES_DB=%s\n' "$POSTGRES_DB"
+        printf 'DATABASE_URL=%s\n' "${DATABASE_URL:-}"
+    } | hash_string)"
+
+    if docker_container_exists hlvmp-db-interface; then
+        CURRENT_IMAGE_ID="$(docker_container_image_id hlvmp-db-interface)"
+        CURRENT_CONFIG_HASH="$(docker_container_label hlvmp-db-interface hlvmp.config-hash)"
+
+        if [[ "$CURRENT_IMAGE_ID" == "$DESIRED_IMAGE_ID" && "$CURRENT_CONFIG_HASH" == "$DESIRED_CONFIG_HASH" ]]; then
+            if docker_container_running hlvmp-db-interface; then
+                log "db-interface container is already running and up to date"
+                exit 0
+            fi
+            log "Starting existing up-to-date db-interface container"
+            docker start hlvmp-db-interface >/dev/null
+            log "db-interface container started successfully"
+            exit 0
+        fi
+
+        log "Existing db-interface container is out of date; recreating it"
+        docker rm -f hlvmp-db-interface >/dev/null 2>&1 || true
+    fi
+
+    docker run -d \
+        --name hlvmp-db-interface \
+        --restart unless-stopped \
+        --label hlvmp.project=homelab-vm-provisioner \
+        --label "hlvmp.config-hash=$DESIRED_CONFIG_HASH" \
+        "${DOCKER_ENV_ARGS[@]}" \
+        -p "$DB_SERVICE_PORT:$DB_SERVICE_PORT" \
+        hlvmp-db-interface:latest
+
+    log ""
+    log "db-interface container started successfully"
+    log "  Microservice URL: http://localhost:$DB_SERVICE_PORT"
+    log ""
+    if [[ "$FOLLOW_LOGS" == "true" ]]; then
+        log "Following container logs (Ctrl+C to exit)..."
+        cleanup() {
+            log ""
+            log "Container still running in background"
+            log "  View logs: docker logs -f hlvmp-db-interface"
+            log "  Stop: docker stop hlvmp-db-interface"
+        }
+        trap cleanup EXIT INT TERM
+        docker logs -f --tail 50 hlvmp-db-interface
+    else
+        log "Container started successfully"
+        log "  View logs: docker logs -f hlvmp-db-interface"
+        log "  Stop: docker stop hlvmp-db-interface"
+    fi
+else
+    # Native mode: run the microservice directly
+    if ! command -v node >/dev/null 2>&1; then
+        log "Error: Node.js not found. Run ./setup to install it."
+        exit 1
+    fi
+
+    log "Starting db-interface microservice on port $DB_SERVICE_PORT"
+    log "  PostgreSQL target: $POSTGRES_USER@$POSTGRES_HOST:$POSTGRES_PORT/$POSTGRES_DB"
+    cd "$SCRIPT_DIR"
+    exec node src/server.js
+fi

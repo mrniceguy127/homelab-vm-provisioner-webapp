@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source component library
+source "$SCRIPT_DIR/scripts/lib.sh"
+
+# Source .env
+source_env "$SCRIPT_DIR/.env"
+
+# Parse arguments
+SKIP_NPM=false
+SKIP_SYSTEM_PACKAGES=false
+DOCKER_MODE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --skip-npm) SKIP_NPM=true ;;
+        --skip-system-packages) SKIP_SYSTEM_PACKAGES=true ;;
+        --docker) DOCKER_MODE=true ;;
+        --help)
+            cat <<HELP
+Usage: $0 [OPTIONS]
+
+Setup the db-interface microservice environment.
+
+Options:
+  --skip-npm               Skip npm install
+  --skip-system-packages   Skip system package installation (Node.js)
+  --docker                 Setup for Docker mode (skip npm install on host)
+  --help                   Show this help message
+HELP
+            exit 0
+            ;;
+    esac
+done
+
+cd "$SCRIPT_DIR"
+
+# Install system packages (Node.js)
+if [[ "$SKIP_SYSTEM_PACKAGES" == false ]]; then
+    ensure_sudo_once "Installing system packages requires sudo."
+    log "Installing Node.js"
+    install_system_packages_nodejs
+fi
+
+log "Setting up db-interface environment"
+
+# Verify Node.js if system packages were skipped
+if [[ "$SKIP_SYSTEM_PACKAGES" == "true" ]]; then
+    require_cmd node
+    require_cmd npm
+    NODE_VERSION=$(node -v | cut -d. -f1 | tr -d 'v')
+    [[ "$NODE_VERSION" -lt 18 ]] && error "Node.js 18+ required, found: $(node -v)" && exit 1
+fi
+
+# In Docker mode dependencies are installed inside the image
+if [[ "$DOCKER_MODE" == true ]]; then
+    log "Docker mode: skipping host npm install (dependencies installed in image)"
+    SKIP_NPM=true
+fi
+
+# Install npm dependencies
+if [[ "$SKIP_NPM" == false ]]; then
+    log "Installing npm dependencies"
+    npm install
+fi
+
+log "db-interface setup complete"
